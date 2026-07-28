@@ -12,6 +12,9 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write   # cloudflare/pages-action needs this to record the deployment
     steps:
       - uses: actions/checkout@v4
 
