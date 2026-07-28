@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ data.title }}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --page-bg: #eef0f3; --page-fg: #111111; --scale: 1; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: var(--page-bg); color: var(--page-fg);
+    font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden;
+  }
+  body { display: flex; flex-direction: column; }
+
+  .page-header {
+    flex: none; display: flex; align-items: center; gap: 1.5vw;
+    padding: 2.2vh 2.4vw 1.2vh;
+  }
+  .page-header h1 { margin: 0; font-size: calc(3.2vh * var(--scale)); font-weight: 700; }
+  .page-header .updated {
+    margin-left: auto; font-size: calc(1.7vh * var(--scale)); opacity: 0.55; font-weight: 600;
+  }
+
+  .grid { flex: 1; min-height: 0; display: flex; gap: 1.6vw; padding: 0 2.4vw 2.2vh; }
+  .col { display: flex; flex-direction: column; gap: 1.6vh; min-width: 0; min-height: 0; }
+  .col-left { flex: 6; }
+  .col-right { flex: 5; }
+
+  .panel {
+    background: var(--panel-bg, #ffffff); color: var(--panel-fg, #111111);
+    border-radius: 14px; overflow: hidden; display: flex; flex-direction: column;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-height: 0; min-width: 0;
+  }
+  .panel-header {
+    flex: none; padding: 1.8vh 1.6vw 0.2vh; font-size: calc(2vh * var(--scale)); font-weight: 700;
+  }
+  .panel-body { flex: 1; min-height: 0; padding: 0.6vh 1.4vw 1.6vh; }
+
+  .panel-line-chart .panel-body { position: relative; }
+  .panel-line-chart .panel-body canvas { width: 100% !important; height: 100% !important; }
+
+  .panel-kpi .panel-body {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 0.8vh; text-align: center;
+  }
+  .kpi-value {
+    font-size: calc(9vh * var(--scale)); font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi-caption { font-size: calc(2vh * var(--scale)); opacity: 0.9; font-weight: 600; }
+
+  .panel-table .panel-body { padding: 0; overflow: auto; }
+  table.data-table { width: 100%; border-collapse: collapse; font-size: calc(1.8vh * var(--scale)); }
+  table.data-table th, table.data-table td {
+    padding: 1.1vh 1vw; text-align: left; border-bottom: 1px solid rgba(0,0,0,0.08);
+    white-space: nowrap;
+  }
+  table.data-table th {
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+    font-size: calc(1.3vh * var(--scale)); opacity: 0.55; position: sticky; top: 0;
+    background: var(--panel-bg, #ffffff);
+  }
+  table.data-table td.num, table.data-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data-table tr.total-row td { font-weight: 700; border-top: 2px solid rgba(0,0,0,0.15); border-bottom: none; }
+
+  #stale-banner {
+    flex: none; display: none; text-align: center; font-weight: 700;
+    font-size: 2vh; padding: 0.9vh; background: #b71c1c; color: #fff; letter-spacing: 0.02em;
+  }
+
+  .zoom-ctl {
+    position: fixed; right: 1.2vw; bottom: 1.2vh; z-index: 1000;
+    display: flex; align-items: center; gap: 0.6vw;
+    background: rgba(0,0,0,0.55); color: #fff; border-radius: 999px;
+    padding: 0.7vh 0.9vw; opacity: 0.15; transition: opacity 0.2s ease;
+  }
+  .zoom-ctl:hover, .zoom-ctl:focus-within { opacity: 0.95; }
+  .zoom-ctl button {
+    width: 3.2vh; height: 3.2vh; border-radius: 50%; border: none; cursor: pointer;
+    background: rgba(255,255,255,0.15); color: #fff; font-size: 1.9vh; font-weight: 700;
+    line-height: 1; display: flex; align-items: center; justify-content: center;
+  }
+  .zoom-ctl button:hover { background: rgba(255,255,255,0.32); }
+  .zoom-ctl button:disabled { opacity: 0.35; cursor: default; }
+  .zoom-ctl #zoom-level {
+    min-width: 4.5ch; text-align: center; font-size: 1.7vh; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+  <div id="stale-banner">Data feed hasn't refreshed recently — showing the last good data.</div>
+  <div class="page-header">
+    <h1>{{ data.title }}</h1>
+    <div class="updated" id="updated-at"></div>
+  </div>
+
+  <div class="grid">
+    {% for col in ['left', 'right'] %}
+    <div class="col col-{{ col }}">
+      {% for panel in data.panels if panel.col == col %}
+      <div class="panel panel-{{ panel.type.replace('_', '-') }}" data-panel-id="{{ panel.id }}"
+           style="--panel-bg: {{ panel.theme.get('background', '#ffffff') }}; --panel-fg: {{ panel.theme.get('font_color', '#111111') }}; flex: {{ panel.flex }};">
+        {% if panel.type != 'kpi' %}<div class="panel-header">{{ panel.title }}</div>{% endif %}
+        <div class="panel-body">
+          {% if panel.type == 'line_chart' %}
+            <canvas id="chart-{{ panel.id }}"></canvas>
+          {% elif panel.type == 'kpi' %}
+            <div class="kpi-value" id="kpi-value-{{ panel.id }}"></div>
+            <div class="kpi-caption" id="kpi-caption-{{ panel.id }}"></div>
+          {% elif panel.type == 'table' %}
+            <table class="data-table" id="table-{{ panel.id }}">
+              <thead><tr>
+                {% for c in panel.columns %}<th class="{{ 'num' if c.type != 'text' else '' }}">{{ c.label }}</th>{% endfor %}
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="zoom-ctl" id="zoom-ctl">
+    <button id="zoom-out" aria-label="Zoom out" type="button">&minus;</button>
+    <span id="zoom-level">100%</span>
+    <button id="zoom-in" aria-label="Zoom in" type="button">&plus;</button>
+  </div>
+
+<script>
+const REFRESH_MS = {{ data.refresh_seconds }} * 1000;
+let charts = {};
+let panelState = {};
+let lastPayload = null;
+let lastGoodAt = Date.now();
+
+// --- Zoom control (independent of the single-chart dashboard's — own key,
+// own scale — since this runs as its own page, possibly its own screen). ---
+const SCALE_MIN = 0.55, SCALE_MAX = 1.3, SCALE_STEP = 0.05;
+const clampScale = (v) => Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(v * 20) / 20));
+let scale = clampScale(parseFloat(localStorage.getItem('multiDashboardScale')) || 1);
+
+function setScale(next) {
+  scale = clampScale(next);
+  document.documentElement.style.setProperty('--scale', scale);
+  document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+  document.getElementById('zoom-out').disabled = scale <= SCALE_MIN;
+  document.getElementById('zoom-in').disabled = scale >= SCALE_MAX;
+  localStorage.setItem('multiDashboardScale', String(scale));
+  if (lastPayload) {
+    Object.keys(charts).forEach((id) => charts[id].destroy());
+    charts = {};
+    lastPayload.panels.forEach((p) => { if (p.type === 'line_chart') renderLineChartPanel(p); });
+  }
+}
+document.getElementById('zoom-in').addEventListener('click', () => setScale(scale + SCALE_STEP));
+document.getElementById('zoom-out').addEventListener('click', () => setScale(scale - SCALE_STEP));
+setScale(scale);
+
+const _probe = document.createElement('canvas').getContext('2d');
+function withAlpha(color, alpha) {
+  _probe.fillStyle = '#000';
+  _probe.fillStyle = color;
+  const c = _probe.fillStyle;
+  if (c[0] === '#') {
+    const n = parseInt(c.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+  }
+  return c.replace(/^rgba?\(([^)]+)\)$/, (m, inner) =>
+    `rgba(${inner.split(',').slice(0, 3).join(',')},${alpha})`);
+}
+
+function panelVar(panelId, varName, fallback) {
+  const el = document.querySelector(`.panel[data-panel-id="${panelId}"]`);
+  const v = el ? getComputedStyle(el).getPropertyValue(varName).trim() : '';
+  return v || fallback;
+}
+
+function fmtValueFor(unit, symbol, v) {
+  if (v === null || v === undefined) return '-';
+  const n = Math.round(v).toLocaleString();
+  return unit === 'currency' ? symbol + n : n;
+}
+
+function fmtCompactFor(unit, symbol, v) {
+  const prefix = unit === 'currency' ? symbol : '';
+  const a = Math.abs(v);
+  if (a >= 1e6) return prefix + (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'm';
+  if (a >= 1e3) return prefix + Math.round(v / 1e3) + 'k';
+  return prefix + Math.round(v);
+}
+
+// A series with no gaps runs the whole period: a reference/pace line
+// (Target, Breakeven) rather than an actual.
+const isReference = (s) => s.data.length > 0 && s.data.every((v) => v !== null && v !== undefined);
+function lastFilled(s) {
+  let i = -1;
+  s.data.forEach((v, k) => { if (v !== null && v !== undefined) i = k; });
+  return i;
+}
+
+function makeTodayLinePlugin(panelId) {
+  return {
+    id: 'todayLine-' + panelId,
+    beforeDatasetsDraw(c) {
+      const idx = (panelState[panelId] || {}).todayIdx ?? -1;
+      if (idx < 0 || idx >= c.data.labels.length - 1) return;
+      const x = c.scales.x.getPixelForValue(idx);
+      const ctx = c.ctx;
+      ctx.save();
+      ctx.strokeStyle = withAlpha(panelVar(panelId, '--panel-fg', '#111'), 0.25);
+      ctx.lineWidth = 2 * scale;
+      ctx.setLineDash([6 * scale, 6 * scale]);
+      ctx.beginPath();
+      ctx.moveTo(x, c.chartArea.top);
+      ctx.lineTo(x, c.chartArea.bottom);
+      ctx.stroke();
+      ctx.restore();
+    },
+  };
+}
+
+function buildDatasetsFor(panel) {
+  return panel.series.map((s) => {
+    const ref = isReference(s);
+    return {
+      label: s.label,
+      data: s.data,
+      borderColor: s.color,
+      backgroundColor: ref ? 'transparent' : withAlpha(s.color, 0.10),
+      fill: ref ? false : 'origin',
+      borderWidth: (ref ? 4 : 6) * scale,
+      borderDash: ref ? [10 * scale, 8 * scale] : [],
+      pointRadius: 0,
+      tension: 0.2,
+      spanGaps: false,
+    };
+  });
+}
+
+function renderLineChartPanel(panel) {
+  const canvas = document.getElementById('chart-' + panel.id);
+  if (!canvas) return;
+
+  const actuals = panel.series.filter((s) => !isReference(s));
+  const idx = actuals.length ? Math.max(...actuals.map(lastFilled)) : panel.labels.length - 1;
+  panelState[panel.id] = { todayIdx: idx };
+
+  const datasets = buildDatasetsFor(panel);
+  let chart = charts[panel.id];
+  if (chart) {
+    chart.data.labels = panel.labels;
+    chart.data.datasets = datasets;
+    chart.update('none');
+    return;
+  }
+
+  const fg = panelVar(panel.id, '--panel-fg', '#111111');
+  const muted = withAlpha(fg, 0.62);
+  const grid = withAlpha(fg, 0.09);
+  const axisFontSize = Math.round(17 * scale);
+
+  chart = new Chart(canvas.getContext('2d'), {
+    type: panel.chart_type || 'line',
+    data: { labels: panel.labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: {
+            color: muted, font: { size: axisFontSize, weight: '600' },
+            maxRotation: 0, autoSkipPadding: 16,
+            callback: (v, i) => {
+              const l = String(panel.labels[i] ?? '');
+              if (/^\d{4}-\d{2}-\d{2}$/.test(l)) return String(Number(l.slice(-2)));
+              return l.length > 3 ? l.slice(0, 3) : l;
+            },
+          },
+        },
+        y: {
+          grid: { color: grid },
+          ticks: {
+            color: muted, font: { size: axisFontSize, weight: '600' },
+            maxTicksLimit: 5, padding: 6,
+            callback: (v) => fmtCompactFor(panel.unit, panel.currency_symbol, v),
+          },
+        },
+      },
+    },
+    plugins: [makeTodayLinePlugin(panel.id)],
+  });
+  charts[panel.id] = chart;
+}
+
+function renderKpiPanel(panel) {
+  const valueEl = document.getElementById('kpi-value-' + panel.id);
+  const capEl = document.getElementById('kpi-caption-' + panel.id);
+  if (valueEl) valueEl.textContent = Math.round(panel.value).toLocaleString();
+  if (capEl) capEl.textContent = panel.caption;
+}
+
+function renderTablePanel(panel) {
+  const table = document.getElementById('table-' + panel.id);
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+  tbody.innerHTML = '';
+  panel.rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    if (String(row[panel.columns[0].key]).toUpperCase() === 'TOTAL') tr.className = 'total-row';
+    panel.columns.forEach((c) => {
+      const td = document.createElement('td');
+      const v = row[c.key];
+      if (c.type === 'currency') { td.className = 'num'; td.textContent = fmtValueFor('currency', '£', v); }
+      else if (c.type === 'number') { td.className = 'num'; td.textContent = Math.round(v).toLocaleString(); }
+      else { td.textContent = v; }
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function applyPayload(payload) {
+  lastPayload = payload;
+  payload.panels.forEach((panel) => {
+    if (panel.type === 'line_chart') renderLineChartPanel(panel);
+    else if (panel.type === 'kpi') renderKpiPanel(panel);
+    else if (panel.type === 'table') renderTablePanel(panel);
+  });
+  const stamp = new Date(payload.generated_at);
+  document.getElementById('updated-at').textContent =
+    'Updated ' + stamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  lastGoodAt = Date.now();
+  document.getElementById('stale-banner').style.display = 'none';
+}
+
+async function refresh() {
+  try {
+    const res = await fetch(`./data.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    applyPayload(await res.json());
+  } catch (e) {
+    console.error('dashboard refresh failed', e);
+    if (Date.now() - lastGoodAt > REFRESH_MS * 4) {
+      document.getElementById('stale-banner').style.display = 'block';
+    }
+  }
+}
+
+applyPayload({{ data | tojson }});
+setInterval(refresh, REFRESH_MS);
+setTimeout(() => location.reload(), 6 * 60 * 60 * 1000);
+</script>
+</body>
+</html>

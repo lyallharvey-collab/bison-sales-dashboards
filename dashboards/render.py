@@ -27,3 +27,13 @@ def render_dashboard(data: dict, out_dir: Path) -> None:
     (out_dir / "index.html").write_text(html, encoding="utf-8")
 
     (out_dir / "data.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def render_multi_dashboard(data: dict, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    template = _env.get_template("multi_dashboard.html.j2")
+    html = template.render(data=data)
+    (out_dir / "index.html").write_text(html, encoding="utf-8")
+
+    (out_dir / "data.json").write_text(json.dumps(data, indent=2), encoding="utf-8")

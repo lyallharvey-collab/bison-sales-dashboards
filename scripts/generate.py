@@ -19,16 +19,23 @@ from dotenv import load_dotenv  # noqa: E402
 
 from dashboards.build import build_dashboard  # noqa: E402
 from dashboards.config_schema import load_config  # noqa: E402
-from dashboards.render import render_dashboard  # noqa: E402
+from dashboards.multi_build import build_multi_dashboard  # noqa: E402
+from dashboards.multi_config_schema import is_multi_dashboard_config, load_multi_config  # noqa: E402
+from dashboards.render import render_dashboard, render_multi_dashboard  # noqa: E402
 
 
 def generate_one(config_path: Path, out_root: Path) -> str:
-    cfg = load_config(config_path)
-    print(f"[{cfg.name}] pulling data from Odoo...")
-    data = build_dashboard(cfg)
-    out_dir = out_root / cfg.name
-    render_dashboard(data, out_dir)
-    print(f"[{cfg.name}] wrote {out_dir / 'index.html'}")
+    if is_multi_dashboard_config(config_path):
+        cfg = load_multi_config(config_path)
+        print(f"[{cfg.name}] pulling data from Odoo ({len(cfg.panels)} panels)...")
+        data = build_multi_dashboard(cfg)
+        render_multi_dashboard(data, out_root / cfg.name)
+    else:
+        cfg = load_config(config_path)
+        print(f"[{cfg.name}] pulling data from Odoo...")
+        data = build_dashboard(cfg)
+        render_dashboard(data, out_root / cfg.name)
+    print(f"[{cfg.name}] wrote {out_root / cfg.name / 'index.html'}")
     return cfg.name
 
 

@@ -1,0 +1,113 @@
+# Reproduces the Dashboard Ninja "Sales Dashboard" export (dashboard_ninja (2).json):
+# Sales Graph + Year To Date charts, a "New Opportunities this week" KPI, and
+# the open-pipeline table, arranged in a 2-column grid.
+name: sales_dashboard
+title: "Sales Dashboard"
+refresh_seconds: 300
+
+panels:
+  - id: sales_graph
+    type: line_chart
+    title: "Sales Graph"
+    col: left
+    flex: 1
+    granularity: day
+    unit: currency
+    currency_symbol: "£"
+    theme:
+      background: "#ffffff"
+      font_color: "#111111"
+    series:
+      - key: target
+        label: "Target"
+        color: "#8e24aa"
+        source: read_group
+        model: x_daily_sales_targets
+        domain: []
+        date_field: x_studio_date
+        measure: x_studio_company_daily_target
+        cumulative: true
+        extend: true
+      - key: breakeven
+        label: "Breakeven"
+        color: "#f4511e"
+        source: read_group
+        model: x_daily_sales_targets
+        domain: []
+        date_field: x_studio_date
+        measure: x_studio_company_daily_breakeven
+        cumulative: true
+        extend: true
+      - key: orders
+        label: "Orders"
+        color: "#1e88e5"
+        source: sales_orders_component
+        cumulative: true
+        extend: false
+      - key: invoiced
+        label: "Invoiced"
+        color: "#43a047"
+        source: read_group
+        model: bison_core.account_move_gp_report
+        domain:
+          - ["move_id.state", "=", "posted"]
+          - ["move_id.move_type", "in", ["out_invoice", "out_refund"]]
+        date_field: sales_target_date
+        measure: aml_total_net
+        cumulative: true
+        extend: false
+
+  - id: year_to_date
+    type: line_chart
+    title: "Year To Date"
+    col: left
+    flex: 1
+    granularity: month
+    unit: currency
+    currency_symbol: "£"
+    theme:
+      background: "#ffffff"
+      font_color: "#111111"
+    series:
+      - key: target
+        label: "Target"
+        color: "#3949ab"
+        source: read_group
+        model: x_daily_sales_targets
+        domain: []
+        date_field: x_studio_date
+        measure: x_studio_company_daily_target
+        cumulative: true
+        extend: true
+      - key: orders
+        label: "Orders"
+        color: "#42a5f5"
+        source: orders_ytd_monthly_component
+        cumulative: true
+        extend: false
+
+  - id: new_opportunities_kpi
+    type: kpi
+    title: "New Opportunities this week"
+    col: right
+    flex: 3
+    theme:
+      background: "#337ab7"
+      font_color: "#ffffff"
+    source: crm_new_opportunities_week
+    caption: "New Opportunities this week"
+
+  - id: opportunities_table
+    type: table
+    title: "New Opportunities This Week"
+    col: right
+    flex: 6
+    theme:
+      background: "#ffffff"
+      font_color: "#111111"
+    source: crm_pipeline_table
+    columns:
+      - { key: stage, label: "Stage", type: text }
+      - { key: total_opps, label: "Total Opps", type: number }
+      - { key: total_value, label: "Total Value", type: currency }
+      - { key: weighted_value, label: "Weighted Value", type: currency }

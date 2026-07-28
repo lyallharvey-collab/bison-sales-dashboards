@@ -133,6 +133,42 @@ reference it from the config as `source: my_function_name` instead of
 `source: read_group`. `sales_orders_component` is the existing example to
 copy.
 
+## Multi-panel dashboards
+
+Some Dashboard Ninja exports are a whole screen, not one chart — e.g.
+`config/sales_dashboard.yaml` (two line charts, a KPI tile, and a pipeline
+table, in a 2-column grid). This is a **separate config shape**, detected
+automatically by the presence of a top-level `panels:` key — `generate.py`
+picks the right builder/template on its own, no flag needed.
+
+Each panel has a `type` (`line_chart` | `kpi` | `table`), a `col`
+(`left`/`right`) and `flex` (relative height weight within that column —
+e.g. a short KPI tile at `flex: 3` above a taller table at `flex: 6`), plus
+its own `theme:` (panels can have wildly different colours, like the blue KPI
+tile against otherwise-white panels).
+
+- `line_chart` panels reuse the same `series:` shape as a single-chart
+  dashboard, plus `granularity: day` or `month` (month-granularity panels use
+  a full calendar year as their x-axis instead of the current month, and
+  `extend: true` means "draw to December" rather than "draw to month-end").
+  Composite sources need a monthly-bucketed twin if a daily one already
+  exists for another panel — `orders_ytd_monthly_component` in
+  `special_sources.py` is the Year-To-Date analogue of
+  `sales_orders_component`, since the two charts bucket the same underlying
+  data differently (daily-this-month vs monthly-this-year).
+- `kpi` and `table` panels have no generic "config, not code" path — they're
+  backed by a named Python function (`source: crm_new_opportunities_week`,
+  `source: crm_pipeline_table`, both in `dashboards/crm_sources.py`) since a
+  scalar count or a grouped-and-weighted table doesn't reduce to "one model,
+  one measure, groupby date" the way a chart series does. `columns:` on a
+  table panel just describes how to *format* whatever rows the source
+  function returns (`text` | `number` | `currency`).
+
+The zoom control on this template is intentionally independent from the
+single-chart dashboard's (separate `localStorage` key) — they're different
+pages, plausibly on different physical screens, and shouldn't fight over one
+saved scale preference.
+
 ## Running on a schedule
 
 **GitHub Actions (what's wired up):** `.github/workflows/refresh.yml` runs on

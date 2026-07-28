@@ -19,17 +19,21 @@ from datetime import date
 
 import pandas as pd
 
-from .data_sources import read_group_daily, read_group_total
+from .data_sources import read_group_daily, read_group_monthly, read_group_total
 from .odoo_client import OdooClient
 
 PROFORMA_STAGE_ID = 2  # x_daily_sales_targets / sale.order "Machinery Stage" = PROFORMA
 
 
-def _subscription_invoice_total(client: OdooClient, month_start: date, month_end: date) -> float:
+def _subscription_order_names(client: OdooClient) -> list[str]:
     sub_orders = client.search_read(
         "sale.order", [["is_subscription", "=", True]], fields=["name"], limit=10000
     )
-    names = [o["name"] for o in sub_orders]
+    return [o["name"] for o in sub_orders]
+
+
+def _subscription_invoice_total(client: OdooClient, month_start: date, month_end: date) -> float:
+    names = _subscription_order_names(client)
     if not names:
         return 0.0
     return read_group_total(
@@ -72,6 +76,46 @@ def sales_orders_component(
     return combined
 
 
+def orders_ytd_monthly_component(
+    client: OdooClient, year_start: date, year_end: date, today: date
+) -> pd.Series:
+    """Monthly analogue of sales_orders_component, for the "Year To Date"
+    chart. Same three ingredients, but the subscription/service-contract
+    invoicing is summed PER MONTH (it recurs every month) rather than once —
+    matching the export's separate monthly-vs-daily SQL for these two charts.
+    """
+    month_to = min(today, year_end)
+
+    confirmed = read_group_monthly(
+        client, "sale.order", [("state", "=", "sale")],
+        "date_order", "amount_untaxed", year_start, month_to,
+    )
+    proforma = read_group_monthly(
+        client,
+        "sale.order",
+        [("state", "in", ["draft", "sent"]), ("machinary_stage_id", "=", PROFORMA_STAGE_ID)],
+        "date_order", "amount_untaxed", year_start, month_to,
+    )
+    combined = confirmed.add(proforma, fill_value=0.0)
+
+    names = _subscription_order_names(client)
+    if names:
+        sub_monthly = read_group_monthly(
+            client,
+            "account.move",
+            [
+                ("invoice_origin", "in", names),
+                ("move_type", "in", ["out_invoice", "out_refund"]),
+                ("state", "=", "posted"),
+            ],
+            "invoice_date", "amount_untaxed", year_start, month_to,
+        )
+        combined = combined.add(sub_monthly, fill_value=0.0)
+
+    return combined.sort_index()
+
+
 COMPOSITE_SOURCES = {
     "sales_orders_component": sales_orders_component,
+    "orders_ytd_monthly_component": orders_ytd_monthly_component,
 }
