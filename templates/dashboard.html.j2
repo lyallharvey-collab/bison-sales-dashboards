@@ -196,6 +196,25 @@ function withAlpha(color, alpha) {
     `rgba(${inner.split(',').slice(0, 3).join(',')},${alpha})`);
 }
 
+// Round-number gridlines (…, 100k, 200k, …) so progress can be eyeballed from
+// across the room instead of read off the axis. Picks a 1/2/2.5/5 x 10^n step
+// that yields roughly `target` bands, then rounds the axis top up to it.
+function niceScale(max, target) {
+  if (!isFinite(max) || max <= 0) return null;
+  const raw = max / target;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw) || 10 * mag;
+  return { step, max: Math.ceil(max / step) * step };
+}
+
+function seriesMax(payload) {
+  let m = 0;
+  payload.series.forEach(s => s.data.forEach(v => {
+    if (v !== null && v !== undefined && v > m) m = v;
+  }));
+  return m;
+}
+
 // A series with no gaps runs to month end: it's a reference/pace line
 // (Target, Breakeven) rather than an actual.
 const isReference = (s) => s.data.length > 0 && s.data.every(v => v !== null && v !== undefined);
@@ -270,7 +289,7 @@ function buildDatasets(payload) {
       borderColor: s.color,
       backgroundColor: ref ? 'transparent' : withAlpha(s.color, 0.10),
       fill: ref ? false : 'origin',
-      borderWidth: (ref ? 4 : 7) * scale,
+      borderWidth: (ref ? 3 : 4) * scale,
       borderDash: ref ? [12 * scale, 10 * scale] : [],
       pointRadius: 0,
       tension: 0.2,
@@ -281,10 +300,15 @@ function buildDatasets(payload) {
 
 function renderChart(payload) {
   const datasets = buildDatasets(payload);
+  const nice = niceScale(seriesMax(payload), 8);
 
   if (chart) {
     chart.data.labels = payload.labels;
     chart.data.datasets = datasets;
+    if (nice) {
+      chart.options.scales.y.max = nice.max;
+      chart.options.scales.y.ticks.stepSize = nice.step;
+    }
     chart.update('none');
     return;
   }
@@ -320,10 +344,13 @@ function renderChart(payload) {
         },
         y: {
           border: { display: false },
-          grid: { color: grid },
+          beginAtZero: true,
+          max: nice ? nice.max : undefined,
+          grid: { color: grid, lineWidth: 1 },
           ticks: {
             color: muted, font: { size: axisFontSize, weight: '600' },
-            maxTicksLimit: 6, padding: 10,
+            stepSize: nice ? nice.step : undefined,
+            autoSkip: false, padding: 10,
             callback: (v) => fmtCompact(v),
           },
         },
