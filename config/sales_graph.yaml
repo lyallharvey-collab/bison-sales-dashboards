@@ -11,13 +11,14 @@ logo_url: null
 theme:
   background: "#ffffff"
   font_color: "#111111"
-  header_bg: "#8e24aa"
+  header_bg: "#111111"            # accent rule + "updated" pill
   header_font_color: "#ffffff"
   font_family: "'Segoe UI', Arial, sans-serif"
-  card_bg: "rgba(142,36,170,0.08)"
+  card_bg: "rgba(17,17,17,0.05)"
 
 series:
   # Reference/pace lines — drawn across the whole month, including future days.
+  # The template renders any gap-free series as a dashed pace line.
   - key: target
     label: "Target"
     color: "#8e24aa"

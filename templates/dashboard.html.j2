@@ -20,39 +20,85 @@
     background: var(--bg); color: var(--fg); font-family: var(--font-family);
     overflow: hidden;
   }
+  body { display: flex; flex-direction: column; }
+
+  /* Thin accent rule instead of a heavy colour band: keeps the theme colour
+     present at a distance without eating vertical space or contrast. */
+  .accent { flex: none; height: 0.95vh; background: var(--header-bg); }
+
   .header {
-    display: flex; align-items: center; gap: 1rem;
-    background: var(--header-bg); color: var(--header-fg);
-    padding: 1.2vh 2vw;
+    flex: none; display: flex; align-items: center; gap: 2vw;
+    padding: 2.8vh 3.3vw 2.4vh;
   }
-  .header img { height: 5vh; }
-  .header h1 { font-size: 2.4vh; margin: 0; font-weight: 600; }
-  .header .updated { margin-left: auto; font-size: 1.3vh; opacity: 0.85; }
+  .header img { height: 6vh; }
+  .header h1 {
+    margin: 0; font-size: 4.8vh; font-weight: 700; letter-spacing: -0.015em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .header .right { margin-left: auto; display: flex; align-items: center; gap: 1.5vw; }
+  .header .progress { font-size: 2.4vh; font-weight: 600; opacity: 0.6; white-space: nowrap; }
+  .header .updated {
+    display: flex; align-items: center; gap: 0.7vw;
+    background: var(--header-bg); color: var(--header-fg);
+    padding: 1.1vh 1.25vw; border-radius: 999px;
+    font-size: 2.4vh; font-weight: 600; white-space: nowrap;
+  }
+  .header .dot {
+    width: 1.3vh; height: 1.3vh; border-radius: 50%;
+    background: currentColor; opacity: 0.9;
+  }
+
   .stats {
-    display: flex; gap: 1.5vw; padding: 1.5vh 2vw 0.5vh;
+    flex: none; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    gap: 1.35vw; padding: 0 3.3vw 2.8vh;
   }
   .stat {
-    flex: 1; background: var(--card-bg); border-radius: 10px;
-    padding: 1.2vh 1.4vw; border-left: 0.6vh solid var(--stat-color, var(--header-bg));
+    background: var(--card-bg); border-radius: 16px;
+    padding: 2.4vh 1.6vw 2.6vh;
+    border-top: 0.75vh solid var(--stat-color, var(--header-bg));
+    display: flex; flex-direction: column; gap: 0.5vh; min-width: 0;
   }
-  .stat .label { font-size: 1.4vh; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.05em; }
-  .stat .value { font-size: 3.6vh; font-weight: 700; line-height: 1.3; }
-  .chart-wrap { padding: 1vh 2vw 2vh; height: 68vh; }
+  .stat .top { display: flex; align-items: center; gap: 0.7vw; }
+  .stat .label {
+    font-size: 2.4vh; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .stat .caption {
+    margin-left: auto; font-size: 2vh; font-weight: 600;
+    opacity: 0.6; white-space: nowrap;
+  }
+  .stat .value {
+    font-size: 7.6vh; font-weight: 700; line-height: 1.05;
+    letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
+  }
+
+  .chart-wrap { flex: 1; min-height: 0; padding: 0 3.3vw 4vh; }
+  .chart-inner {
+    height: 100%; padding-top: 2vh;
+    border-top: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  }
+
   #stale-banner {
-    display: none; text-align: center; font-size: 1.4vh; padding: 0.4vh;
-    background: #b71c1c; color: #fff;
+    flex: none; display: none; text-align: center; font-weight: 700;
+    font-size: 2.4vh; padding: 1vh; background: #b71c1c; color: #fff;
+    letter-spacing: 0.02em;
   }
 </style>
 </head>
 <body>
   <div id="stale-banner">Data feed hasn't refreshed recently — showing the last good data.</div>
+  <div class="accent"></div>
   <div class="header">
     {% if data.logo_url %}<img src="{{ data.logo_url }}" alt="logo">{% endif %}
     <h1>{{ data.title }}</h1>
-    <div class="updated" id="updated-at"></div>
+    <div class="right">
+      <div class="progress" id="progress"></div>
+      <div class="updated"><span class="dot"></span><span id="updated-at"></span></div>
+    </div>
   </div>
   <div class="stats" id="stats-row"></div>
-  <div class="chart-wrap"><canvas id="chart"></canvas></div>
+  <div class="chart-wrap"><div class="chart-inner"><canvas id="chart"></canvas></div></div>
 
 <script>
 const DASHBOARD_NAME = {{ data.name | tojson }};
@@ -61,39 +107,126 @@ const CURRENCY_SYMBOL = {{ data.currency_symbol | tojson }};
 const UNIT = {{ data.unit | tojson }};
 let chart = null;
 let lastGoodAt = Date.now();
+let todayIdx = -1;
+
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 function fmtValue(v) {
   if (v === null || v === undefined) return '-';
-  if (UNIT === 'currency') {
-    return CURRENCY_SYMBOL + Math.round(v).toLocaleString();
+  const n = Math.round(v).toLocaleString();
+  return UNIT === 'currency' ? CURRENCY_SYMBOL + n : n;
+}
+
+// Short axis labels — full precision lives in the stat cards, the axis only
+// needs to be readable from across the room.
+function fmtCompact(v) {
+  const prefix = UNIT === 'currency' ? CURRENCY_SYMBOL : '';
+  const a = Math.abs(v);
+  if (a >= 1e6) return prefix + (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'm';
+  if (a >= 1e3) return prefix + Math.round(v / 1e3) + 'k';
+  return prefix + Math.round(v);
+}
+
+// Resolve any CSS colour (hex, rgb(), named) the theme/series config may use
+// into rgba, so the actuals can get a soft fill in their own colour.
+const _probe = document.createElement('canvas').getContext('2d');
+function withAlpha(color, alpha) {
+  _probe.fillStyle = '#000';
+  _probe.fillStyle = color;
+  const c = _probe.fillStyle;
+  if (c[0] === '#') {
+    const n = parseInt(c.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
   }
-  return Math.round(v).toLocaleString();
+  return c.replace(/^rgba?\(([^)]+)\)$/, (m, inner) =>
+    `rgba(${inner.split(',').slice(0, 3).join(',')},${alpha})`);
+}
+
+// A series with no gaps runs to month end: it's a reference/pace line
+// (Target, Breakeven) rather than an actual.
+const isReference = (s) => s.data.length > 0 && s.data.every(v => v !== null && v !== undefined);
+function lastFilled(s) {
+  let i = -1;
+  s.data.forEach((v, k) => { if (v !== null && v !== undefined) i = k; });
+  return i;
 }
 
 function renderStats(payload) {
   const row = document.getElementById('stats-row');
+  const refs = payload.series.filter(isReference);
+  const baseline = refs.length ? refs[0] : null;
+  const baseValue = baseline ? payload.latest[baseline.key] : null;
+
   row.innerHTML = '';
   payload.series.forEach(s => {
+    let caption = '';
+    if (isReference(s)) {
+      caption = 'month end';
+    } else if (baseValue) {
+      caption = Math.round((payload.latest[s.key] / baseValue) * 100) + '% of ' +
+                baseline.label.toLowerCase();
+    }
     const div = document.createElement('div');
     div.className = 'stat';
     div.style.setProperty('--stat-color', s.color);
-    div.innerHTML = `<div class="label">${s.label}</div><div class="value">${fmtValue(payload.latest[s.key])}</div>`;
+    div.innerHTML =
+      `<div class="top"><div class="label"></div><div class="caption"></div></div>` +
+      `<div class="value"></div>`;
+    div.querySelector('.label').textContent = s.label;
+    div.querySelector('.caption').textContent = caption;
+    div.querySelector('.value').textContent = fmtValue(payload.latest[s.key]);
     row.appendChild(div);
   });
 }
 
+function renderProgress(payload) {
+  const el = document.getElementById('progress');
+  const actuals = payload.series.filter(s => !isReference(s));
+  const idx = actuals.length ? Math.max(...actuals.map(lastFilled)) : payload.labels.length - 1;
+  todayIdx = idx;
+  el.textContent = idx >= 0 ? `Day ${idx + 1} of ${payload.labels.length}` : '';
+}
+
+// Dashed marker at the last day with actual data, so the empty rest of the
+// month reads as "not yet" rather than "fell off a cliff".
+const todayLine = {
+  id: 'todayLine',
+  beforeDatasetsDraw(c) {
+    if (todayIdx < 0 || todayIdx >= c.data.labels.length - 1) return;
+    const x = c.scales.x.getPixelForValue(todayIdx);
+    const ctx = c.ctx;
+    ctx.save();
+    ctx.strokeStyle = withAlpha(cssVar('--fg') || '#111', 0.28);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    ctx.moveTo(x, c.chartArea.top);
+    ctx.lineTo(x, c.chartArea.bottom);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
+function buildDatasets(payload) {
+  return payload.series.map(s => {
+    const ref = isReference(s);
+    return {
+      label: s.label,
+      data: s.data,
+      borderColor: s.color,
+      backgroundColor: ref ? 'transparent' : withAlpha(s.color, 0.10),
+      fill: ref ? false : 'origin',
+      borderWidth: ref ? 4 : 7,
+      borderDash: ref ? [12, 10] : [],
+      pointRadius: 0,
+      tension: 0.2,
+      spanGaps: false,
+    };
+  });
+}
+
 function renderChart(payload) {
-  const ctx = document.getElementById('chart').getContext('2d');
-  const datasets = payload.series.map(s => ({
-    label: s.label,
-    data: s.data,
-    borderColor: s.color,
-    backgroundColor: s.color,
-    borderWidth: 3,
-    pointRadius: 0,
-    tension: 0.15,
-    spanGaps: false,
-  }));
+  const datasets = buildDatasets(payload);
 
   if (chart) {
     chart.data.labels = payload.labels;
@@ -102,36 +235,56 @@ function renderChart(payload) {
     return;
   }
 
-  chart = new Chart(ctx, {
+  const fg = cssVar('--fg') || '#111';
+  const muted = withAlpha(fg, 0.62);
+  const grid = withAlpha(fg, 0.09);
+
+  chart = new Chart(document.getElementById('chart').getContext('2d'), {
     type: payload.chart_type || 'line',
     data: { labels: payload.labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: 'nearest', intersect: false },
-      plugins: {
-        legend: { position: 'bottom', labels: { color: getComputedStyle(document.documentElement).getPropertyValue('--fg'), font: { size: 14 } } },
-      },
+      layout: { padding: { right: 8 } },
+      // Kiosk display: nothing to hover, and the stat cards are the legend.
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
       scales: {
-        x: { ticks: { color: 'var(--fg)' }, grid: { color: 'rgba(128,128,128,0.15)' } },
-        y: {
+        x: {
+          border: { color: withAlpha(fg, 0.25) },
+          grid: { display: false },
           ticks: {
-            color: 'var(--fg)',
-            callback: (v) => fmtValue(v),
+            color: muted, font: { size: 22, weight: '600' },
+            maxRotation: 0, autoSkipPadding: 24,
+            // Day-of-month only: "01" not "2026-07-01".
+            callback: (v, i) => {
+              const l = String(payload.labels[i] ?? '');
+              return /^\d{4}-\d{2}-\d{2}$/.test(l) ? String(Number(l.slice(-2))) : l;
+            },
           },
-          grid: { color: 'rgba(128,128,128,0.15)' },
+        },
+        y: {
+          border: { display: false },
+          grid: { color: grid },
+          ticks: {
+            color: muted, font: { size: 22, weight: '600' },
+            maxTicksLimit: 6, padding: 10,
+            callback: (v) => fmtCompact(v),
+          },
         },
       },
     },
+    plugins: [todayLine],
   });
 }
 
 function applyPayload(payload) {
+  renderProgress(payload);
   renderStats(payload);
   renderChart(payload);
   const stamp = new Date(payload.generated_at);
-  document.getElementById('updated-at').textContent = 'Updated ' + stamp.toLocaleTimeString();
+  document.getElementById('updated-at').textContent =
+    stamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   lastGoodAt = Date.now();
   document.getElementById('stale-banner').style.display = 'none';
 }
