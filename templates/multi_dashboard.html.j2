@@ -202,7 +202,7 @@ function niceScale(max, target) {
   if (!isFinite(max) || max <= 0) return null;
   const raw = max / target;
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-  const step = [1, 2, 2.5, 5, 10].map((x) => x * mag).find((v) => v >= raw) || 10 * mag;
+  const step = [1, 2, 5, 10].map((x) => x * mag).find((v) => v >= raw) || 10 * mag;
   return { step, max: Math.ceil(max / step) * step };
 }
 
@@ -251,14 +251,27 @@ function buildDatasetsFor(panel) {
       label: s.label,
       data: s.data,
       borderColor: s.color,
-      backgroundColor: ref ? 'transparent' : withAlpha(s.color, 0.10),
+      backgroundColor: ref ? 'transparent' : withAlpha(s.color, 0.07),
       fill: ref ? false : 'origin',
-      borderWidth: (ref ? 3 : 4) * scale,
+      borderWidth: (ref ? 2 : 3) * scale,
       borderDash: ref ? [10 * scale, 8 * scale] : [],
       pointRadius: 0,
+      pointHoverRadius: 5 * scale,
+      pointHoverBorderWidth: 2 * scale,
+      pointHoverBorderColor: '#ffffff',
+      pointHitRadius: 0,
       tension: 0.2,
       spanGaps: false,
     };
+  });
+}
+
+// "Tue 14 Jul" for daily labels; month names and other labels pass through.
+function fmtTooltipLabel(label) {
+  const l = String(label ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(l)) return l;
+  return new Date(l + 'T00:00:00').toLocaleDateString([], {
+    weekday: 'short', day: 'numeric', month: 'short',
   });
 }
 
@@ -271,7 +284,7 @@ function renderLineChartPanel(panel) {
   panelState[panel.id] = { todayIdx: idx };
 
   const datasets = buildDatasetsFor(panel);
-  const nice = niceScale(panelMax(panel), 7);
+  const nice = niceScale(panelMax(panel), 10);
   let chart = charts[panel.id];
   if (chart) {
     chart.data.labels = panel.labels;
@@ -286,7 +299,7 @@ function renderLineChartPanel(panel) {
 
   const fg = panelVar(panel.id, '--panel-fg', '#111111');
   const muted = withAlpha(fg, 0.62);
-  const grid = withAlpha(fg, 0.09);
+  const grid = withAlpha(fg, 0.14);
   const axisFontSize = Math.round(17 * scale);
 
   chart = new Chart(canvas.getContext('2d'), {
@@ -296,7 +309,30 @@ function renderLineChartPanel(panel) {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          mode: 'index',
+          intersect: false,
+          displayColors: true,
+          backgroundColor: withAlpha(fg, 0.92),
+          titleColor: panelVar(panel.id, '--panel-bg', '#ffffff'),
+          bodyColor: panelVar(panel.id, '--panel-bg', '#ffffff'),
+          titleFont: { size: Math.round(16 * scale), weight: '700' },
+          bodyFont: { size: Math.round(16 * scale), weight: '600' },
+          padding: Math.round(11 * scale),
+          boxPadding: Math.round(5 * scale),
+          cornerRadius: 8,
+          callbacks: {
+            title: (items) => fmtTooltipLabel(items[0].label),
+            label: (item) => ' ' + item.dataset.label + '  ' +
+              fmtValueFor(panel.unit, panel.currency_symbol, item.parsed.y),
+          },
+        },
+      },
+      interaction: { mode: 'index', intersect: false },
+      hover: { mode: 'index', intersect: false },
       scales: {
         x: {
           grid: { display: false },
