@@ -1,0 +1,62 @@
+# Reproduces the Dashboard Ninja "Sales Graph" export (Sales_Graph.json):
+# cumulative daily Target / Breakeven / Orders / Invoiced for the current month.
+name: sales_graph
+title: "Sales Graph — This Month"
+chart_type: line
+unit: currency
+currency_symbol: "£"
+refresh_seconds: 300
+logo_url: null
+
+theme:
+  background: "#ffffff"
+  font_color: "#111111"
+  header_bg: "#8e24aa"
+  header_font_color: "#ffffff"
+  font_family: "'Segoe UI', Arial, sans-serif"
+  card_bg: "rgba(142,36,170,0.08)"
+
+series:
+  # Reference/pace lines — drawn across the whole month, including future days.
+  - key: target
+    label: "Target"
+    color: "#8e24aa"
+    source: read_group
+    model: x_daily_sales_targets
+    domain: []
+    date_field: x_studio_date
+    measure: x_studio_company_daily_target
+    cumulative: true
+    extend_to_month_end: true
+
+  - key: breakeven
+    label: "Breakeven"
+    color: "#f4511e"
+    source: read_group
+    model: x_daily_sales_targets
+    domain: []
+    date_field: x_studio_date
+    measure: x_studio_company_daily_breakeven
+    cumulative: true
+    extend_to_month_end: true
+
+  # Actuals — stop at today, so the chart shows a gap for the rest of the month.
+  - key: orders
+    label: "Orders"
+    color: "#1e88e5"
+    source: sales_orders_component
+    cumulative: true
+    extend_to_month_end: false
+
+  - key: invoiced
+    label: "Invoiced"
+    color: "#43a047"
+    source: read_group
+    model: bison_core.account_move_gp_report
+    domain:
+      - ["move_id.state", "=", "posted"]
+      - ["move_id.move_type", "in", ["out_invoice", "out_refund"]]
+    date_field: sales_target_date
+    measure: aml_total_net
+    cumulative: true
+    extend_to_month_end: false

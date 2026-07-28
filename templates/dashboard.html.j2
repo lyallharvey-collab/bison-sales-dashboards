@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ data.title }}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root {
+    --bg: {{ theme.get('background', '#ffffff') }};
+    --fg: {{ theme.get('font_color', '#111111') }};
+    --header-bg: {{ theme.get('header_bg', '#8e24aa') }};
+    --header-fg: {{ theme.get('header_font_color', '#ffffff') }};
+    --font-family: {{ theme.get('font_family', "'Segoe UI', Arial, sans-serif") }};
+    --card-bg: {{ theme.get('card_bg', 'rgba(0,0,0,0.03)') }};
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: var(--bg); color: var(--fg); font-family: var(--font-family);
+    overflow: hidden;
+  }
+  .header {
+    display: flex; align-items: center; gap: 1rem;
+    background: var(--header-bg); color: var(--header-fg);
+    padding: 1.2vh 2vw;
+  }
+  .header img { height: 5vh; }
+  .header h1 { font-size: 2.4vh; margin: 0; font-weight: 600; }
+  .header .updated { margin-left: auto; font-size: 1.3vh; opacity: 0.85; }
+  .stats {
+    display: flex; gap: 1.5vw; padding: 1.5vh 2vw 0.5vh;
+  }
+  .stat {
+    flex: 1; background: var(--card-bg); border-radius: 10px;
+    padding: 1.2vh 1.4vw; border-left: 0.6vh solid var(--stat-color, var(--header-bg));
+  }
+  .stat .label { font-size: 1.4vh; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat .value { font-size: 3.6vh; font-weight: 700; line-height: 1.3; }
+  .chart-wrap { padding: 1vh 2vw 2vh; height: 68vh; }
+  #stale-banner {
+    display: none; text-align: center; font-size: 1.4vh; padding: 0.4vh;
+    background: #b71c1c; color: #fff;
+  }
+</style>
+</head>
+<body>
+  <div id="stale-banner">Data feed hasn't refreshed recently — showing the last good data.</div>
+  <div class="header">
+    {% if data.logo_url %}<img src="{{ data.logo_url }}" alt="logo">{% endif %}
+    <h1>{{ data.title }}</h1>
+    <div class="updated" id="updated-at"></div>
+  </div>
+  <div class="stats" id="stats-row"></div>
+  <div class="chart-wrap"><canvas id="chart"></canvas></div>
+
+<script>
+const DASHBOARD_NAME = {{ data.name | tojson }};
+const REFRESH_MS = {{ data.refresh_seconds }} * 1000;
+const CURRENCY_SYMBOL = {{ data.currency_symbol | tojson }};
+const UNIT = {{ data.unit | tojson }};
+let chart = null;
+let lastGoodAt = Date.now();
+
+function fmtValue(v) {
+  if (v === null || v === undefined) return '-';
+  if (UNIT === 'currency') {
+    return CURRENCY_SYMBOL + Math.round(v).toLocaleString();
+  }
+  return Math.round(v).toLocaleString();
+}
+
+function renderStats(payload) {
+  const row = document.getElementById('stats-row');
+  row.innerHTML = '';
+  payload.series.forEach(s => {
+    const div = document.createElement('div');
+    div.className = 'stat';
+    div.style.setProperty('--stat-color', s.color);
+    div.innerHTML = `<div class="label">${s.label}</div><div class="value">${fmtValue(payload.latest[s.key])}</div>`;
+    row.appendChild(div);
+  });
+}
+
+function renderChart(payload) {
+  const ctx = document.getElementById('chart').getContext('2d');
+  const datasets = payload.series.map(s => ({
+    label: s.label,
+    data: s.data,
+    borderColor: s.color,
+    backgroundColor: s.color,
+    borderWidth: 3,
+    pointRadius: 0,
+    tension: 0.15,
+    spanGaps: false,
+  }));
+
+  if (chart) {
+    chart.data.labels = payload.labels;
+    chart.data.datasets = datasets;
+    chart.update('none');
+    return;
+  }
+
+  chart = new Chart(ctx, {
+    type: payload.chart_type || 'line',
+    data: { labels: payload.labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'nearest', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: getComputedStyle(document.documentElement).getPropertyValue('--fg'), font: { size: 14 } } },
+      },
+      scales: {
+        x: { ticks: { color: 'var(--fg)' }, grid: { color: 'rgba(128,128,128,0.15)' } },
+        y: {
+          ticks: {
+            color: 'var(--fg)',
+            callback: (v) => fmtValue(v),
+          },
+          grid: { color: 'rgba(128,128,128,0.15)' },
+        },
+      },
+    },
+  });
+}
+
+function applyPayload(payload) {
+  renderStats(payload);
+  renderChart(payload);
+  const stamp = new Date(payload.generated_at);
+  document.getElementById('updated-at').textContent = 'Updated ' + stamp.toLocaleTimeString();
+  lastGoodAt = Date.now();
+  document.getElementById('stale-banner').style.display = 'none';
+}
+
+async function refresh() {
+  try {
+    const res = await fetch(`./data.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    applyPayload(await res.json());
+  } catch (e) {
+    console.error('dashboard refresh failed', e);
+    if (Date.now() - lastGoodAt > REFRESH_MS * 4) {
+      document.getElementById('stale-banner').style.display = 'block';
+    }
+  }
+}
+
+// Initial paint uses the data baked in at generation time — no fetch needed
+// for first render, so the screen shows something immediately even if the
+// network is briefly unavailable.
+applyPayload({{ data | tojson }});
+setInterval(refresh, REFRESH_MS);
+
+// Safety-net full reload every 6h to clear any stuck JS state / memory growth
+// on a screen nobody is going to babysit.
+setTimeout(() => location.reload(), 6 * 60 * 60 * 1000);
+</script>
+</body>
+</html>
