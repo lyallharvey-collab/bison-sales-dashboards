@@ -13,6 +13,9 @@
     --header-fg: {{ theme.get('header_font_color', '#ffffff') }};
     --font-family: {{ theme.get('font_family', "'Segoe UI', Arial, sans-serif") }};
     --card-bg: {{ theme.get('card_bg', 'rgba(0,0,0,0.03)') }};
+    /* Overall size of text/lines, adjustable live via the zoom control —
+       persisted in localStorage so it survives refreshes and the 6h reload. */
+    --scale: 1;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -24,24 +27,24 @@
 
   /* Thin accent rule instead of a heavy colour band: keeps the theme colour
      present at a distance without eating vertical space or contrast. */
-  .accent { flex: none; height: 0.95vh; background: var(--header-bg); }
+  .accent { flex: none; height: calc(0.95vh * var(--scale)); background: var(--header-bg); }
 
   .header {
     flex: none; display: flex; align-items: center; gap: 2vw;
     padding: 2.8vh 3.3vw 2.4vh;
   }
-  .header img { height: 6vh; }
+  .header img { height: calc(6vh * var(--scale)); }
   .header h1 {
-    margin: 0; font-size: 4.8vh; font-weight: 700; letter-spacing: -0.015em;
+    margin: 0; font-size: calc(4.8vh * var(--scale)); font-weight: 700; letter-spacing: -0.015em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .header .right { margin-left: auto; display: flex; align-items: center; gap: 1.5vw; }
-  .header .progress { font-size: 2.4vh; font-weight: 600; opacity: 0.6; white-space: nowrap; }
+  .header .progress { font-size: calc(2.4vh * var(--scale)); font-weight: 600; opacity: 0.6; white-space: nowrap; }
   .header .updated {
     display: flex; align-items: center; gap: 0.7vw;
     background: var(--header-bg); color: var(--header-fg);
     padding: 1.1vh 1.25vw; border-radius: 999px;
-    font-size: 2.4vh; font-weight: 600; white-space: nowrap;
+    font-size: calc(2.4vh * var(--scale)); font-weight: 600; white-space: nowrap;
   }
   .header .dot {
     width: 1.3vh; height: 1.3vh; border-radius: 50%;
@@ -55,21 +58,21 @@
   .stat {
     background: var(--card-bg); border-radius: 16px;
     padding: 2.4vh 1.6vw 2.6vh;
-    border-top: 0.75vh solid var(--stat-color, var(--header-bg));
+    border-top: calc(0.75vh * var(--scale)) solid var(--stat-color, var(--header-bg));
     display: flex; flex-direction: column; gap: 0.5vh; min-width: 0;
   }
   .stat .top { display: flex; align-items: center; gap: 0.7vw; }
   .stat .label {
-    font-size: 2.4vh; font-weight: 700; letter-spacing: 0.08em;
+    font-size: calc(2.4vh * var(--scale)); font-weight: 700; letter-spacing: 0.08em;
     text-transform: uppercase; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
   }
   .stat .caption {
-    margin-left: auto; font-size: 2vh; font-weight: 600;
+    margin-left: auto; font-size: calc(2vh * var(--scale)); font-weight: 600;
     opacity: 0.6; white-space: nowrap;
   }
   .stat .value {
-    font-size: 7.6vh; font-weight: 700; line-height: 1.05;
+    font-size: calc(7.6vh * var(--scale)); font-weight: 700; line-height: 1.05;
     letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
   }
 
@@ -83,6 +86,29 @@
     flex: none; display: none; text-align: center; font-weight: 700;
     font-size: 2.4vh; padding: 1vh; background: #b71c1c; color: #fff;
     letter-spacing: 0.02em;
+  }
+
+  /* Zoom control — deliberately understated (this is a wall display, not an
+     app): a translucent pill in the corner that only asserts itself once
+     someone's mouse/remote actually finds it. */
+  .zoom-ctl {
+    position: fixed; right: 1.2vw; bottom: 1.2vh; z-index: 1000;
+    display: flex; align-items: center; gap: 0.6vw;
+    background: rgba(0,0,0,0.55); color: #fff; border-radius: 999px;
+    padding: 0.7vh 0.9vw; font-family: var(--font-family);
+    opacity: 0.15; transition: opacity 0.2s ease;
+  }
+  .zoom-ctl:hover, .zoom-ctl:focus-within { opacity: 0.95; }
+  .zoom-ctl button {
+    width: 3.2vh; height: 3.2vh; border-radius: 50%; border: none; cursor: pointer;
+    background: rgba(255,255,255,0.15); color: #fff; font-size: 1.9vh; font-weight: 700;
+    line-height: 1; display: flex; align-items: center; justify-content: center;
+  }
+  .zoom-ctl button:hover { background: rgba(255,255,255,0.32); }
+  .zoom-ctl button:disabled { opacity: 0.35; cursor: default; }
+  .zoom-ctl #zoom-level {
+    min-width: 4.5ch; text-align: center; font-size: 1.7vh; font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
 </style>
 </head>
@@ -100,6 +126,12 @@
   <div class="stats" id="stats-row"></div>
   <div class="chart-wrap"><div class="chart-inner"><canvas id="chart"></canvas></div></div>
 
+  <div class="zoom-ctl" id="zoom-ctl">
+    <button id="zoom-out" aria-label="Zoom out" type="button">&minus;</button>
+    <span id="zoom-level">100%</span>
+    <button id="zoom-in" aria-label="Zoom in" type="button">&plus;</button>
+  </div>
+
 <script>
 const DASHBOARD_NAME = {{ data.name | tojson }};
 const REFRESH_MS = {{ data.refresh_seconds }} * 1000;
@@ -108,8 +140,30 @@ const UNIT = {{ data.unit | tojson }};
 let chart = null;
 let lastGoodAt = Date.now();
 let todayIdx = -1;
+let lastPayload = null;
 
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// --- Zoom control: overall text/line scale, adjustable on the page and
+// persisted so it survives data refreshes and the 6h safety-net reload. ---
+const SCALE_MIN = 0.55, SCALE_MAX = 1.3, SCALE_STEP = 0.05;
+const clampScale = (v) => Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(v * 20) / 20));
+let scale = clampScale(parseFloat(localStorage.getItem('dashboardScale')) || 1);
+
+function setScale(next) {
+  scale = clampScale(next);
+  document.documentElement.style.setProperty('--scale', scale);
+  document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+  document.getElementById('zoom-out').disabled = scale <= SCALE_MIN;
+  document.getElementById('zoom-in').disabled = scale >= SCALE_MAX;
+  localStorage.setItem('dashboardScale', String(scale));
+  // Text (CSS vh + var(--scale)) updates immediately via the stylesheet;
+  // the chart's own font/line sizes are plain JS numbers, so rebuild it.
+  if (chart && lastPayload) { chart.destroy(); chart = null; renderChart(lastPayload); }
+}
+document.getElementById('zoom-in').addEventListener('click', () => setScale(scale + SCALE_STEP));
+document.getElementById('zoom-out').addEventListener('click', () => setScale(scale - SCALE_STEP));
+setScale(scale); // sync label/button state before the first paint
 
 function fmtValue(v) {
   if (v === null || v === undefined) return '-';
@@ -197,8 +251,8 @@ const todayLine = {
     const ctx = c.ctx;
     ctx.save();
     ctx.strokeStyle = withAlpha(cssVar('--fg') || '#111', 0.28);
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 6]);
+    ctx.lineWidth = 2 * scale;
+    ctx.setLineDash([6 * scale, 6 * scale]);
     ctx.beginPath();
     ctx.moveTo(x, c.chartArea.top);
     ctx.lineTo(x, c.chartArea.bottom);
@@ -216,8 +270,8 @@ function buildDatasets(payload) {
       borderColor: s.color,
       backgroundColor: ref ? 'transparent' : withAlpha(s.color, 0.10),
       fill: ref ? false : 'origin',
-      borderWidth: ref ? 4 : 7,
-      borderDash: ref ? [12, 10] : [],
+      borderWidth: (ref ? 4 : 7) * scale,
+      borderDash: ref ? [12 * scale, 10 * scale] : [],
       pointRadius: 0,
       tension: 0.2,
       spanGaps: false,
@@ -238,6 +292,7 @@ function renderChart(payload) {
   const fg = cssVar('--fg') || '#111';
   const muted = withAlpha(fg, 0.62);
   const grid = withAlpha(fg, 0.09);
+  const axisFontSize = Math.round(22 * scale);
 
   chart = new Chart(document.getElementById('chart').getContext('2d'), {
     type: payload.chart_type || 'line',
@@ -254,7 +309,7 @@ function renderChart(payload) {
           border: { color: withAlpha(fg, 0.25) },
           grid: { display: false },
           ticks: {
-            color: muted, font: { size: 22, weight: '600' },
+            color: muted, font: { size: axisFontSize, weight: '600' },
             maxRotation: 0, autoSkipPadding: 24,
             // Day-of-month only: "01" not "2026-07-01".
             callback: (v, i) => {
@@ -267,7 +322,7 @@ function renderChart(payload) {
           border: { display: false },
           grid: { color: grid },
           ticks: {
-            color: muted, font: { size: 22, weight: '600' },
+            color: muted, font: { size: axisFontSize, weight: '600' },
             maxTicksLimit: 6, padding: 10,
             callback: (v) => fmtCompact(v),
           },
@@ -279,6 +334,7 @@ function renderChart(payload) {
 }
 
 function applyPayload(payload) {
+  lastPayload = payload;
   renderProgress(payload);
   renderStats(payload);
   renderChart(payload);
