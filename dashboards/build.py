@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import pandas as pd
 
@@ -20,24 +20,42 @@ def _month_bounds(today: date) -> tuple[date, date]:
     return month_start, month_end
 
 
+def _fold_weekends_into_prior_business_day(daily: pd.Series) -> pd.Series:
+    """The chart's x-axis is business days only. Weekend activity has no day
+    of its own to land on, so fold it into the same week's Friday — backward,
+    not forward into next Monday, so it shows up immediately (as part of
+    Friday's running total) rather than sitting invisible until Monday
+    arrives, including when "today" is itself a Saturday/Sunday."""
+    if daily.empty:
+        return daily
+    out: dict = {}
+    for ts, val in daily.items():
+        if ts.weekday() >= 5:  # Saturday=5, Sunday=6
+            ts = pd.offsets.BDay().rollback(ts)
+        out[ts] = out.get(ts, 0.0) + val
+    return pd.Series(out).sort_index()
+
+
 def _daily_for_series(
     client: OdooClient, s: SeriesConfig, month_start: date, month_end: date, today: date, day_to: date
 ) -> pd.Series:
     if s.source == "read_group":
         if not (s.model and s.date_field and s.measure):
             raise ValueError(f"series '{s.key}': read_group source needs model/date_field/measure")
-        return read_group_daily(client, s.model, s.domain, s.date_field, s.measure, month_start, day_to)
-    if s.source in COMPOSITE_SOURCES:
+        daily = read_group_daily(client, s.model, s.domain, s.date_field, s.measure, month_start, day_to)
+    elif s.source in COMPOSITE_SOURCES:
         daily = COMPOSITE_SOURCES[s.source](client, month_start, month_end, today)
-        return daily[daily.index <= pd.Timestamp(day_to)]
-    raise ValueError(f"series '{s.key}': unknown source '{s.source}'")
+        daily = daily[daily.index <= pd.Timestamp(day_to)]
+    else:
+        raise ValueError(f"series '{s.key}': unknown source '{s.source}'")
+    return _fold_weekends_into_prior_business_day(daily)
 
 
 def build_dashboard(cfg: DashboardConfig, today: date | None = None) -> dict:
     client = get_client()
     today = today or date.today()
     month_start, month_end = _month_bounds(today)
-    x_axis = [month_start + timedelta(days=i) for i in range((month_end - month_start).days + 1)]
+    x_axis = [ts.date() for ts in pd.bdate_range(month_start, month_end)]
 
     series_out = []
     latest = {}
@@ -46,7 +64,7 @@ def build_dashboard(cfg: DashboardConfig, today: date | None = None) -> dict:
         daily = _daily_for_series(client, s, month_start, month_end, today, day_to)
 
         if s.cumulative:
-            full_range = pd.date_range(month_start, day_to, freq="D")
+            full_range = pd.bdate_range(month_start, day_to)
             series_values = daily.reindex(full_range, fill_value=0.0).cumsum()
         else:
             series_values = daily
