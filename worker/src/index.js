@@ -14,10 +14,12 @@ export async function refreshAll(env) {
     buildMultiDashboardPayload(client, SALES_DASHBOARD_CONFIG, today),
   ]);
 
-  await Promise.all([
-    env.DASHBOARD_DATA.put('sales_graph', JSON.stringify(salesGraph)),
-    env.DASHBOARD_DATA.put('sales_dashboard', JSON.stringify(salesDashboard)),
-  ]);
+  // One combined write, not two: Workers KV's free tier caps writes at
+  // 1,000/day. At */2 cron (720 firings/day), two separate keys would be
+  // 1,440 writes/day — over the cap, causing writes to silently fail once
+  // the daily quota is exhausted until it resets. One key keeps it at
+  // 720/day, comfortably under the limit.
+  await env.DASHBOARD_DATA.put('dashboards', JSON.stringify({ sales_graph: salesGraph, sales_dashboard: salesDashboard }));
 
   return { salesGraph, salesDashboard };
 }
