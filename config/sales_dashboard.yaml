@@ -3,7 +3,7 @@
 # the open-pipeline table, arranged in a 2-column grid.
 name: sales_dashboard
 title: "Sales Dashboard"
-refresh_seconds: 300
+refresh_seconds: 120
 
 panels:
   - id: sales_graph

@@ -1,9 +1,23 @@
-name: Refresh dashboards
+name: Deploy dashboards
 
+# Live data no longer comes from this workflow — the bison-dashboard-refresher
+# Cloudflare Worker pulls Odoo on its own 2-minute Cron Trigger and writes to
+# KV; Pages Functions serve that live data on every page load. This workflow
+# only (re)deploys the static HTML/CSS/JS shell (and a baked-in fallback
+# payload for first paint) when the template/config/Worker source changes —
+# occasional, not continuous, which is what keeps this off GitHub's billed
+# Actions minutes at any real volume.
 on:
-  schedule:
-    - cron: "*/10 * * * *"   # best-effort — GitHub can delay scheduled runs, see README
-  workflow_dispatch: {}       # lets you trigger a refresh manually from the Actions tab
+  push:
+    branches: [main]
+    paths:
+      - "templates/**"
+      - "config/**"
+      - "dashboards/**"
+      - "scripts/**"
+      - "functions/**"
+      - ".github/workflows/refresh.yml"
+  workflow_dispatch: {}   # trigger a redeploy manually from the Actions tab
 
 concurrency:
   group: refresh-dashboards
@@ -31,6 +45,9 @@ jobs:
           ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
           ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
         run: python scripts/generate.py --all
+
+      - name: Include Pages Functions (live-data endpoints)
+        run: cp -r functions output/
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1

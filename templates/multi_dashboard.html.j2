@@ -418,7 +418,11 @@ async function refresh() {
   }
 }
 
+// The live data source (a Worker on its own cron) now updates far more
+// often than this HTML is redeployed, so the baked-in payload can be
+// meaningfully stale — kick off a live refresh right away.
 applyPayload({{ data | tojson }});
+refresh();
 setInterval(refresh, REFRESH_MS);
 setTimeout(() => location.reload(), 6 * 60 * 60 * 1000);
 </script>

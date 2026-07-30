@@ -5,7 +5,7 @@ title: "Sales Graph — This Month"
 chart_type: line
 unit: currency
 currency_symbol: "£"
-refresh_seconds: 300
+refresh_seconds: 120
 logo_url: null
 
 theme:

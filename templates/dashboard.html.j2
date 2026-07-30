@@ -424,8 +424,12 @@ async function refresh() {
 
 // Initial paint uses the data baked in at generation time — no fetch needed
 // for first render, so the screen shows something immediately even if the
-// network is briefly unavailable.
+// network is briefly unavailable. The live data source (a Worker on its own
+// cron) now updates far more often than this HTML is redeployed, so the
+// baked-in payload can be meaningfully stale — kick off a live refresh right
+// away rather than waiting a full interval to find out.
 applyPayload({{ data | tojson }});
+refresh();
 setInterval(refresh, REFRESH_MS);
 
 // Safety-net full reload every 6h to clear any stuck JS state / memory growth

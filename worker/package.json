@@ -1,0 +1,13 @@
+{
+  "name": "bison-dashboard-refresher",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node src/xmlrpc.test.mjs && node src/dates.test.mjs",
+    "livetest": "node src/odooClient.livetest.mjs && node src/compare.livetest.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.115.0"
+  }
+}

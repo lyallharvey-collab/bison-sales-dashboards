@@ -13,35 +13,60 @@ relaxation for this network's inspection appliance).
 
 ## Architecture
 
-You said there's no always-on PC by the screens — the TV is just a smart-TV
-browser — and that you want the page to live-refresh (fetch + redraw) rather
-than do a full reload, hosted on Cloudflare. Putting those together:
+Live data refresh (every ~2 minutes) now runs entirely on Cloudflare, not
+GitHub Actions:
 
 ```
-GitHub Actions (cron, every ~10 min)
-  → runs generate.py: pulls Odoo via OdooClient, computes cumulative sums
-    in pandas, writes output/<dashboard>/index.html + data.json
-  → deploys output/ to Cloudflare Pages (static hosting)
+bison-dashboard-refresher (Cloudflare Worker, Cron Trigger every 2 min)
+  → pulls Odoo directly via a hand-rolled XML-RPC-over-fetch client
+  → computes the same cumulative sums / weekend-folding / CRM weighting
+    as the Python pipeline (worker/src/*.js — a JS port, verified value-
+    for-value against the Python output before it ever shipped)
+  → writes JSON to a Cloudflare KV namespace (DASHBOARD_DATA)
 
-Cloudflare Pages (public URL)
-  → TV browser opens the URL ONCE and leaves it open
-  → page JS re-fetches data.json every `refresh_seconds` and redraws
-    Chart.js in place — no reload, no flash
+Cloudflare Pages Functions (functions/<dashboard>/data.json.js)
+  → intercept GET /<dashboard>/data.json, read the live payload from KV
+  → same domain/zone as the rest of the site, so Cloudflare Access gates
+    these exactly like the HTML pages — verified by curling them directly
+    and confirming the 302-to-Access-login, not assumed
+
+TV browser
+  → opens the Pages URL once, authenticates through Cloudflare Access
+  → page JS fetches data.json immediately on load, then every
+    `refresh_seconds` (120s) — redraws Chart.js in place, no reload
 ```
 
-**One assumption worth flagging:** the actual Odoo-fetching code runs in
-GitHub Actions, not in a Cloudflare Worker. Cloudflare's Python Workers
-runtime (Pyodide-based) doesn't give `xmlrpc.client` a working transport for
-real outbound sockets, so the XML-RPC calls this needs can't run there
-directly — and reimplementing the data layer in JS would mean maintaining two
-codebases instead of one. GitHub Actions is free, needs no server to
-maintain, and keeps everything in the Python/pandas/OdooClient shape you
-asked for. Cloudflare's job is purely to host and serve the static output. If
-you'd rather explore a pure-Workers rewrite instead, say so and we can revisit
-this — but it's a bigger lift for no real benefit here.
+**Why not GitHub Actions on a tight schedule?** The original design ran the
+Odoo pull as a GitHub Actions cron job. Two problems surfaced in practice:
+GitHub's `schedule:` trigger is genuinely unreliable at short intervals (gaps
+of hours were observed against a nominal `*/10` cron, not just the
+documented "occasionally a few minutes late"), and — more fundamentally —
+GitHub bills Actions minutes per run; a 2-minute cadence would cost roughly
+**$150+/month** on a private repo, since the billing meter cares about how
+often the actual job runs, not what triggers it. A Cloudflare Worker's Cron
+Trigger is both more reliable at short intervals and free at this volume, so
+the live-refresh path moved there entirely.
 
-Practical note: GitHub's schedule is best-effort — a `*/10` cron can slip to
-15-20 minutes under load. Fine for a wall dashboard; not a guarantee.
+**The tradeoff this introduces:** the aggregation logic now genuinely exists
+in two languages — `dashboards/*.py` (Python/pandas) and `worker/src/*.js`
+(hand-ported to JavaScript, since Cloudflare's Python Workers runtime can't
+give `xmlrpc.client` a working transport for real outbound sockets). Before
+shipping the JS port, every series/panel was diff-tested against the
+Python-computed output on live data (`worker/src/compare.livetest.mjs`) —
+they matched exactly. But the two are not mechanically kept in sync: if you
+change a business rule (a new composite source, a different weekend policy,
+new CRM weighting), you now have to update it in both places. `configs.js`
+also duplicates `config/*.yaml` for the same reason (no YAML parser bundled
+into the Worker). This is a deliberate, documented cost of getting genuinely
+free 2-minute freshness — not an oversight.
+
+**What GitHub Actions still does:** `.github/workflows/refresh.yml` no
+longer runs on a schedule at all — it only fires on `workflow_dispatch` or
+when you push a change to `templates/`, `config/`, `dashboards/`,
+`scripts/`, or `functions/`. It regenerates the static HTML shell (with a
+baked-in fallback payload for first paint) and redeploys it to Cloudflare
+Pages, including the `functions/` directory — occasional, not continuous,
+which is what keeps this off GitHub's billed minutes.
 
 ## Project layout
 
@@ -60,8 +85,18 @@ sales-dashboards/
     sales_graph.yaml      the first dashboard
   scripts/
     generate.py           CLI entrypoint
+  functions/              Cloudflare Pages Functions — serve live KV data at
+                          /<dashboard>/data.json, same domain as the HTML so
+                          they inherit the same Cloudflare Access gate
+  worker/                 bison-dashboard-refresher: the Cloudflare Worker
+                          that actually pulls Odoo every 2 minutes (JS port
+                          of dashboards/*.py — see Architecture above)
+    src/xmlrpc.js          hand-rolled XML-RPC codec (no DOMParser in Workers)
+    src/*.test.mjs         unit tests, run with `npm test`
+    src/*.livetest.mjs     tests against live Odoo + a diff against Python
+                          output, run with `npm run livetest`
   .github/workflows/
-    refresh.yml            scheduled build + Cloudflare Pages deploy
+    refresh.yml            push/manual-triggered build + Cloudflare Pages deploy
   output/                 generated HTML/JSON (gitignored, deploy artifact only)
 ```
 
@@ -124,6 +159,16 @@ series:
 Drop it in `config/`, run `generate.py --all`. That's the whole "config, not
 code" path from requirement 4.
 
+**Important since the live-refresh Worker landed:** a config dropped into
+`config/` on its own only gets refreshed when the GitHub Actions pipeline
+runs (i.e. when you push, or trigger it manually) — it does **not**
+automatically get the Worker's 2-minute live refresh, because the Worker's
+`configs.js` only knows about the two dashboards hardcoded into it. A new
+dashboard needs its config ported into `worker/src/configs.js` too (and any
+new composite source into `worker/src/specialSources.js` /
+`crmSources.js`) to join the 2-minute cadence — see the Architecture
+tradeoff note above.
+
 **When it doesn't fit that shape** — e.g. the Sales Graph's "Orders" line,
 which is really three sums combined (confirmed orders + proformas +
 a monthly subscription-invoicing lump, all by different domains/models) before
@@ -169,55 +214,57 @@ single-chart dashboard's (separate `localStorage` key) — they're different
 pages, plausibly on different physical screens, and shouldn't fight over one
 saved scale preference.
 
-## Running on a schedule
+## Keeping it running
 
-**GitHub Actions (what's wired up):** `.github/workflows/refresh.yml` runs on
-a cron and on manual dispatch. It needs these repo secrets:
+Two separate deploys keep this live — they change on different, mostly
+unrelated cadences.
 
-- `ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, `ODOO_PASSWORD` — same as your `.env`
-- `CLOUDFLARE_API_TOKEN` — a token scoped to **Cloudflare Pages: Edit** for your account
-- `CLOUDFLARE_ACCOUNT_ID` — from the Cloudflare dashboard sidebar
+**The live-refresh Worker** (`worker/`) is the thing actually pulling Odoo
+every 2 minutes. To (re)deploy it after a code change:
 
-**Cloudflare Pages setup — done, live now:**
+```bash
+cd worker
+npm test           # unit tests — no network, no credentials needed
+npm run livetest   # tests against live Odoo + diffs the JS output against
+                    # the Python output — run this after any change to the
+                    # aggregation logic, before deploying
+npx wrangler deploy
+```
 
-Using the already-authenticated `wrangler` CLI on this machine, the
-`bison-dashboards` Pages project has been created and the current
-`output/` deployed as a one-off manual push:
+It needs 4 secrets (`ODOO_URL`/`ODOO_DB`/`ODOO_USERNAME`/`ODOO_PASSWORD`),
+set once via `wrangler secret put <NAME>` (already done) — and one KV
+namespace (`DASHBOARD_DATA`, id in `worker/wrangler.toml`) that's also bound
+to the Pages project (in the top-level `wrangler.toml`) so the Pages
+Functions in `functions/` can read what the Worker writes. `workers_dev` and
+`preview_urls` are explicitly disabled — this Worker has no public HTTP
+route at all, only its Cron Trigger; verify that stayed true after any
+config change (`curl` its `*.workers.dev` URL should just fail to resolve,
+not 404 — a 404 would mean the route came back).
 
-- **https://bison-dashboards.pages.dev/** — root page links to each dashboard
-- **https://bison-dashboards.pages.dev/sales_graph/** — the Sales Graph, live now, confirmed rendering with real data
+**The GitHub Actions pipeline** (`.github/workflows/refresh.yml`) only
+redeploys the static HTML/CSS/JS shell — it fires on push to
+`templates/`/`config/`/`dashboards/`/`scripts/`/`functions/`, or manually via
+`workflow_dispatch`, **not on a schedule**. It needs these repo secrets:
 
-Account: `Lyallharv23@gmail.com's Account`, account ID `5d255a554c200f7a0de4cd895d4d4073`
-(you'll need this ID for the GitHub Actions secret below).
+- `ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, `ODOO_PASSWORD` — used only for the
+  baked-in fallback payload at first paint, same as your `.env`
+- `CLOUDFLARE_API_TOKEN` — a token scoped to **Cloudflare Pages: Edit**
+- `CLOUDFLARE_ACCOUNT_ID` — `5d255a554c200f7a0de4cd895d4d4073`
 
-That manual deploy won't refresh itself, though — for the recurring
-GitHub Actions job in `refresh.yml` to take over, you still need to:
+**Live now:**
+- **https://bison-dashboards.pages.dev/sales_graph/**
+- **https://bison-dashboards.pages.dev/sales_dashboard/**
 
-1. Push this repo to GitHub (it isn't one yet — I only deployed the static
-   output, I didn't create a git repo or push anything anywhere).
-2. Create a Cloudflare API token scoped to **Cloudflare Pages: Edit**
-   (Cloudflare dashboard → My Profile → API Tokens → Create Token). My local
-   `wrangler` session is logged in via OAuth, which isn't something CI can
-   use — Actions needs its own token.
-3. Add repo secrets (Settings → Secrets and variables → Actions):
-   `ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, `ODOO_PASSWORD`,
-   `CLOUDFLARE_API_TOKEN` (from step 2), `CLOUDFLARE_ACCOUNT_ID` (from above).
-4. First scheduled or manually-triggered Action run takes over refreshing it.
-
-Until step 4 is done, the site is live but frozen at whatever data was in
-`output/` at the last manual `wrangler pages deploy`.
-
-**Privacy:** Cloudflare Pages URLs are public by default. This dashboard is
-company sales figures, not customer PII, but you may still want to gate it —
-Cloudflare Access (free for a handful of users) can put a login wall in front
-of the Pages project with no code changes, or you can rely on the URL being
-unguessable. Your call; not built in yet.
+Both are gated by Cloudflare Access — confirmed by curling `/data.json` on
+each and getting redirected to the Access login, not a 200 with data.
+Whoever administers Access should confirm the policy is scoped to the right
+people; I didn't configure that policy myself.
 
 ## Pointing a screen at it
 
 Any smart-TV/kiosk browser: open the Pages URL and leave the tab open.
 - Disable the TV's screensaver/sleep timer for that input/app.
-- The page redraws its data every `refresh_seconds` (5 min by default)
+- The page redraws its data every `refresh_seconds` (2 min for the two live dashboards)
   without reloading, and does one full reload every 6 hours as a safety net
   against stuck JS state — you won't need to touch it day-to-day.
 - If the data feed goes stale (no successful refresh for 4× the refresh
