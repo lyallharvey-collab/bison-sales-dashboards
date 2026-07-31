@@ -50,11 +50,17 @@
      Replaces the end-of-line direct labels, which collided where the lines
      converge and were redundant next to the figures. Shown in both modes: it is
      the legend, so it can't be desktop-only. FUNCTIONAL, NOT DESIGNED. */
-  .panel-stats { flex: none; display: flex; gap: 1.2vw; padding: 0.8vh 0 0; flex-wrap: wrap; }
+  .panel-stats {
+    flex: none; display: flex; justify-content: center; align-items: baseline;
+    gap: 1.4vw; padding: 0.8vh 0 0; flex-wrap: wrap;
+  }
   .panel-stats .ps { display: flex; align-items: baseline; gap: 0.45vw; min-width: 0; }
   .panel-stats .dot { width: 1.1vh; height: 1.1vh; border-radius: 50%; flex: none; }
   .panel-stats .lab { font-size: calc(1.5vh * var(--scale)); opacity: 0.6; font-weight: 600; white-space: nowrap; }
   .panel-stats .val { font-size: calc(2.5vh * var(--scale)); font-weight: 700; white-space: nowrap; }
+  /* Small and muted so it reads as an annotation on the value, not a second
+     number competing with it. */
+  .panel-stats .pct { font-size: calc(1.5vh * var(--scale)); font-weight: 600; opacity: 0.55; white-space: nowrap; }
 
   /* One control row scoping every chart on the page — never per-card filters,
      which let panels drift into different states and mislead. */
@@ -577,6 +583,18 @@ function renderPanelStats(panel) {
     val.className = 'val';
     val.textContent = fmtValueFor(panel.unit, panel.currency_symbol, row.value);
     wrap.append(dot, lab, val);
+    // Actuals get "% of where we should be by now"; pace lines get the figure
+    // they're heading for. Never both on one row — that's how it gets cluttered.
+    const note = document.createElement('span');
+    note.className = 'pct';
+    const atEnd = row.periodEndValue !== null && row.value !== null
+      && Math.abs(row.periodEndValue - row.value) < 1;
+    if (row.is_reference && row.periodEndValue !== null && !atEnd) {
+      note.textContent = 'of ' + fmtCompactFor(panel.unit, panel.currency_symbol, row.periodEndValue);
+    } else if (!row.is_reference && row.pctOfTarget !== null) {
+      note.textContent = Math.round(row.pctOfTarget * 100) + '%';
+    }
+    if (note.textContent) wrap.appendChild(note);
     el.appendChild(wrap);
   });
 }

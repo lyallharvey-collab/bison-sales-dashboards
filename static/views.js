@@ -216,8 +216,17 @@
     var dayNow = idx + 1;
     var daysRemaining = Math.max(0, dayTotal - dayNow);
 
+    // TWO different target figures, and conflating them is misleading.
+    //   targetToDate  the target as at today — the apples-to-apples number to
+    //                 compare an actual against, and what "% of target" must
+    //                 divide by. On the YTD chart in July, comparing £4.8m of
+    //                 orders against the £10.6m FULL-YEAR target reads as 45%
+    //                 when the honest figure is 77% of where we should be.
+    //   targetFinal   the whole period's target. Correct for "how much per day
+    //                 do we still need", wrong for "how are we doing".
+    var targetToDate = baseline && idx >= 0 ? baseline.data[idx] : null;
     var targetFinal = baseline ? lastFilledValue(baseline.data) : null;
-    var primaryNow = primary ? primary.data[idx] : null;
+    var primaryNow = primary && idx >= 0 ? primary.data[idx] : null;
 
     var perDayNeeded = (isNum(targetFinal) && isNum(primaryNow) && daysRemaining > 0)
       ? (targetFinal - primaryNow) / daysRemaining
@@ -231,6 +240,7 @@
       daysRemaining: daysRemaining,
       baselineKey: baseline ? baseline.key : null,
       baselineLabel: baseline ? baseline.label : null,
+      targetToDate: targetToDate,
       targetFinal: targetFinal,
       primaryKey: primary ? primary.key : null,
       primaryNow: primaryNow,
@@ -240,14 +250,22 @@
       projectedPctOfTarget: (isNum(projectedFinish) && targetFinal)
         ? projectedFinish / targetFinal : null,
       series: (panel.series || []).map(function (s) {
-        var value = isReference(s) ? lastFilledValue(s.data) : s.data[idx];
+        var ref = isReference(s);
+        // Every row reports its position AS AT TODAY, including the pace lines.
+        // Previously the pace lines reported their period-end figure, which put
+        // two different timeframes side by side in the same row and invited the
+        // wrong comparison.
+        var value = idx >= 0 ? s.data[idx] : null;
         return {
           key: s.key,
           label: s.label,
           color: s.color,
-          is_reference: isReference(s),
+          is_reference: ref,
           value: isNum(value) ? value : null,
-          pctOfTarget: (isNum(value) && targetFinal) ? value / targetFinal : null,
+          // The period-end figure is still worth showing for a pace line — it's
+          // the number to hit — just not as the headline.
+          periodEndValue: ref ? lastFilledValue(s.data) : null,
+          pctOfTarget: (isNum(value) && targetToDate) ? value / targetToDate : null,
         };
       }),
     };

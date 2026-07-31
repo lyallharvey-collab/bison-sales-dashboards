@@ -305,28 +305,37 @@ function lastFilled(s) {
 
 function renderStats(payload) {
   const row = document.getElementById('stats-row');
-  const refs = payload.series.filter(isReference);
-  const baseline = refs.length ? refs[0] : null;
-  const baseValue = baseline ? payload.latest[baseline.key] : null;
-
   row.innerHTML = '';
-  payload.series.forEach(s => {
+  // Single source of truth for these figures (shared with the multi-panel
+  // dashboard), and it reports every series AS AT TODAY — including the pace
+  // lines, which used to show their month-end figure alongside to-date
+  // actuals. Two timeframes in one row invites the wrong comparison.
+  const sum = DV ? DV.summarise(payload) : null;
+  const rows = sum ? sum.series : payload.series.map(s => ({
+    key: s.key, label: s.label, color: s.color,
+    is_reference: isReference(s), value: payload.latest[s.key],
+    periodEndValue: null, pctOfTarget: null,
+  }));
+
+  rows.forEach(r => {
     let caption = '';
-    if (isReference(s)) {
-      caption = 'month end';
-    } else if (baseValue) {
-      caption = Math.round((payload.latest[s.key] / baseValue) * 100) + '% of ' +
-                baseline.label.toLowerCase();
+    const atEnd = r.periodEndValue !== null && r.value !== null
+      && Math.abs(r.periodEndValue - r.value) < 1;
+    if (r.is_reference && r.periodEndValue !== null && !atEnd) {
+      // The number still to hit, kept as the small annotation.
+      caption = 'of ' + fmtCompact(r.periodEndValue);
+    } else if (!r.is_reference && r.pctOfTarget !== null) {
+      caption = Math.round(r.pctOfTarget * 100) + '% of pace';
     }
     const div = document.createElement('div');
     div.className = 'stat';
-    div.style.setProperty('--stat-color', s.color);
+    div.style.setProperty('--stat-color', r.color);
     div.innerHTML =
       `<div class="top"><div class="label"></div><div class="caption"></div></div>` +
       `<div class="value"></div>`;
-    div.querySelector('.label').textContent = s.label;
+    div.querySelector('.label').textContent = r.label;
     div.querySelector('.caption').textContent = caption;
-    div.querySelector('.value').textContent = fmtValue(payload.latest[s.key]);
+    div.querySelector('.value').textContent = fmtValue(r.value);
     row.appendChild(div);
   });
 }
