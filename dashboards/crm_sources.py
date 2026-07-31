@@ -45,25 +45,33 @@ def new_opportunities_this_week(client: OdooClient, today: date | None = None) -
 
 def pipeline_table(client: OdooClient) -> list[dict]:
     """One row per open pipeline stage (count / total value / weighted value),
-    plus a TOTAL row — mirrors the export's two-part UNION query."""
-    rows = client.search_read(
+    plus a TOTAL row — mirrors the export's two-part UNION query.
+
+    Uses read_group rather than pulling the individual leads: ~734 rows to
+    produce 5 numbers. Kept identical to the Worker's JS implementation
+    (worker/src/crmSources.js), where the row pull was expensive enough to
+    exceed the Cloudflare free-tier CPU budget.
+    """
+    groups = client.read_group(
         "crm.lead",
         [
             ("active", "=", True),
             ("won_status", "=", "pending"),
             ("stage_id", "in", PIPELINE_STAGE_IDS),
         ],
-        fields=["stage_id", "expected_revenue"],
-        limit=10000,
+        ["expected_revenue"],
+        ["stage_id"],
+        lazy=False,
     )
 
     by_stage = {sid: {"count": 0, "value": 0.0} for sid in PIPELINE_STAGE_IDS}
-    for r in rows:
-        sid = (r.get("stage_id") or [None])[0]
+    for g in groups:
+        stage = g.get("stage_id")
+        sid = stage[0] if isinstance(stage, (list, tuple)) else stage
         if sid not in by_stage:
             continue
-        by_stage[sid]["count"] += 1
-        by_stage[sid]["value"] += r.get("expected_revenue") or 0.0
+        by_stage[sid]["count"] = g.get("stage_id_count") or g.get("__count") or 0
+        by_stage[sid]["value"] = g.get("expected_revenue") or 0.0
 
     out = []
     total = {"count": 0, "value": 0.0, "weighted": 0.0}

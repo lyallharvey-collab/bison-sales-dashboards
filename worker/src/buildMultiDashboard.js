@@ -55,7 +55,7 @@ async function buildMonthlyLineChartPanel(client, panel, today) {
       const key = isoDate(m);
       return values.has(key) ? values.get(key) : null;
     });
-    seriesOut.push({ key: s.key, label: s.label, color: s.color, data: dataPoints });
+    seriesOut.push({ key: s.key, label: s.label, color: s.color, data: dataPoints, is_reference: !!s.extend });
     const nonNull = dataPoints.filter((v) => v !== null);
     latest[s.key] = nonNull.length ? nonNull[nonNull.length - 1] : 0;
   }

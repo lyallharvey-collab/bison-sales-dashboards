@@ -73,7 +73,10 @@ def _build_monthly_line_chart(client: OdooClient, panel: PanelConfig, today: dat
 
         by_month = {d.date(): float(v) for d, v in values.items()}
         data_points = [by_month.get(m) for m in months]
-        series_out.append({"key": s.key, "label": s.label, "color": s.color, "data": data_points})
+        series_out.append({
+            "key": s.key, "label": s.label, "color": s.color, "data": data_points,
+            "is_reference": s.extend,  # see build.py — don't make the template guess
+        })
         non_null = [v for v in data_points if v is not None]
         latest[s.key] = non_null[-1] if non_null else 0.0
 

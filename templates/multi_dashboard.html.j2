@@ -214,9 +214,13 @@ function panelMax(panel) {
   return m;
 }
 
-// A series with no gaps runs the whole period: a reference/pace line
-// (Target, Breakeven) rather than an actual.
-const isReference = (s) => s.data.length > 0 && s.data.every((v) => v !== null && v !== undefined);
+// Pace/reference lines (Target, Breakeven) are dashed and unfilled; actuals
+// are solid and filled. Stated by the builder rather than inferred from gaps,
+// which breaks on the last business day of the month when the actuals have no
+// gaps either. Gap check kept only as a fallback for older payloads.
+const isReference = (s) => (s.is_reference !== undefined && s.is_reference !== null)
+  ? !!s.is_reference
+  : (s.data.length > 0 && s.data.every((v) => v !== null && v !== undefined));
 function lastFilled(s) {
   let i = -1;
   s.data.forEach((v, k) => { if (v !== null && v !== undefined) i = k; });

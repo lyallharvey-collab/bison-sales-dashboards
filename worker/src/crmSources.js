@@ -23,25 +23,37 @@ export async function newOpportunitiesThisWeek(client, today) {
 }
 
 /** One row per open pipeline stage (count / total value / weighted value),
- * plus a TOTAL row — mirrors crm_sources.py's pipeline_table. */
+ * plus a TOTAL row — mirrors crm_sources.py's pipeline_table.
+ *
+ * Uses read_group, NOT a row pull. Pulling the individual leads meant
+ * parsing ~734 records of XML to produce 5 numbers, which on its own was
+ * enough to blow the Workers free-tier 10ms CPU budget (observed:
+ * outcome "exceededCpu"). read_group has Postgres do the count/sum and
+ * returns 5 rows. */
 export async function pipelineTable(client) {
-  const rows = await client.searchRead(
+  const groups = await client.readGroup(
     'crm.lead',
     [
       ['active', '=', true],
       ['won_status', '=', 'pending'],
       ['stage_id', 'in', PIPELINE_STAGE_IDS],
     ],
-    { fields: ['stage_id', 'expected_revenue'], limit: 10000 },
+    ['expected_revenue'],
+    ['stage_id'],
+    false,
   );
 
   const byStage = new Map(PIPELINE_STAGE_IDS.map((id) => [id, { count: 0, value: 0 }]));
-  for (const r of rows) {
-    const sid = Array.isArray(r.stage_id) ? r.stage_id[0] : null;
+  for (const g of groups) {
+    const sid = Array.isArray(g.stage_id) ? g.stage_id[0] : g.stage_id;
     if (!byStage.has(sid)) continue;
-    const b = byStage.get(sid);
-    b.count += 1;
-    b.value += r.expected_revenue || 0;
+    byStage.set(sid, {
+      // Odoo names the count key after the groupby field; __count is the
+      // documented fallback. Both are checked so a version change can't
+      // silently zero the counts.
+      count: g.stage_id_count ?? g.__count ?? 0,
+      value: g.expected_revenue || 0,
+    });
   }
 
   const out = [];

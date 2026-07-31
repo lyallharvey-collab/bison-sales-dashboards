@@ -76,6 +76,11 @@ def build_dashboard(cfg: DashboardConfig, today: date | None = None) -> dict:
             "label": s.label,
             "color": s.color,
             "data": data_points,
+            # Stated explicitly rather than left for the template to infer from
+            # gaps in the data: on the last business day of the month the
+            # actuals have no gaps either, so gap-sniffing silently redraws
+            # them as dashed pace lines.
+            "is_reference": s.extend_to_month_end,
         })
         non_null = [v for v in data_points if v is not None]
         latest[s.key] = non_null[-1] if non_null else 0.0

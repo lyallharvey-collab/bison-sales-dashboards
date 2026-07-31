@@ -215,9 +215,14 @@ function seriesMax(payload) {
   return m;
 }
 
-// A series with no gaps runs to month end: it's a reference/pace line
-// (Target, Breakeven) rather than an actual.
-const isReference = (s) => s.data.length > 0 && s.data.every(v => v !== null && v !== undefined);
+// Pace/reference lines (Target, Breakeven) are drawn dashed and unfilled;
+// actuals are solid and filled. The builder states this per series, because
+// inferring it from "has no gaps" breaks on the last business day of the
+// month, when the actuals have no gaps either. The gap check remains only as
+// a fallback for a payload generated before is_reference existed.
+const isReference = (s) => (s.is_reference !== undefined && s.is_reference !== null)
+  ? !!s.is_reference
+  : (s.data.length > 0 && s.data.every(v => v !== null && v !== undefined));
 function lastFilled(s) {
   let i = -1;
   s.data.forEach((v, k) => { if (v !== null && v !== undefined) i = k; });

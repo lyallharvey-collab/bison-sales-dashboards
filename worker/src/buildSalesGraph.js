@@ -45,7 +45,9 @@ export async function buildSalesGraphPayload(client, cfg, today) {
       const key = isoDate(d);
       return values.has(key) ? values.get(key) : null;
     });
-    seriesOut.push({ key: s.key, label: s.label, color: s.color, data: dataPoints });
+    // is_reference stated explicitly, not inferred from gaps: on the last
+    // business day of the month the actuals have no gaps either.
+    seriesOut.push({ key: s.key, label: s.label, color: s.color, data: dataPoints, is_reference: !!s.extend });
     const nonNull = dataPoints.filter((v) => v !== null);
     latest[s.key] = nonNull.length ? nonNull[nonNull.length - 1] : 0;
   }
