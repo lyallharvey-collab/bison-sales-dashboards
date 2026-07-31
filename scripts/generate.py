@@ -2,8 +2,14 @@
 """
 Generate one or all dashboards.
 
-    python scripts/generate.py --config config/sales_graph.yaml
-    python scripts/generate.py --all
+    python scripts/generate.py --all           # with live Odoo data baked in
+    python scripts/generate.py --all --shell   # HTML only, no Odoo access
+
+--shell is what CI uses. Live figures are served at request time by the Pages
+Function in functions/<dashboard>/data.json.js, so the deployed HTML only needs
+the shell; building it that way means CI needs no Odoo credentials at all.
+Without --shell the generator still bakes real data in, which is handy for
+local preview and for the JS/Python parity check (npm run livetest).
 """
 
 from __future__ import annotations
@@ -22,18 +28,27 @@ from dashboards.config_schema import load_config  # noqa: E402
 from dashboards.multi_build import build_multi_dashboard  # noqa: E402
 from dashboards.multi_config_schema import is_multi_dashboard_config, load_multi_config  # noqa: E402
 from dashboards.render import render_dashboard, render_multi_dashboard  # noqa: E402
+from dashboards.shell_build import build_multi_shell, build_shell  # noqa: E402
 
 
-def generate_one(config_path: Path, out_root: Path) -> str:
+def generate_one(config_path: Path, out_root: Path, shell: bool = False) -> str:
     if is_multi_dashboard_config(config_path):
         cfg = load_multi_config(config_path)
-        print(f"[{cfg.name}] pulling data from Odoo ({len(cfg.panels)} panels)...")
-        data = build_multi_dashboard(cfg)
+        if shell:
+            print(f"[{cfg.name}] rendering shell ({len(cfg.panels)} panels, no Odoo)...")
+            data = build_multi_shell(cfg)
+        else:
+            print(f"[{cfg.name}] pulling data from Odoo ({len(cfg.panels)} panels)...")
+            data = build_multi_dashboard(cfg)
         render_multi_dashboard(data, out_root / cfg.name)
     else:
         cfg = load_config(config_path)
-        print(f"[{cfg.name}] pulling data from Odoo...")
-        data = build_dashboard(cfg)
+        if shell:
+            print(f"[{cfg.name}] rendering shell (no Odoo)...")
+            data = build_shell(cfg)
+        else:
+            print(f"[{cfg.name}] pulling data from Odoo...")
+            data = build_dashboard(cfg)
         render_dashboard(data, out_root / cfg.name)
     print(f"[{cfg.name}] wrote {out_root / cfg.name / 'index.html'}")
     return cfg.name
@@ -57,6 +72,10 @@ def main() -> None:
     parser.add_argument("--all", action="store_true", help="generate every *.yaml in config/")
     parser.add_argument("--out", type=Path, default=ROOT / "output", help="output directory")
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
+    parser.add_argument(
+        "--shell", action="store_true",
+        help="render HTML from config only, without contacting Odoo (what CI uses)",
+    )
     args = parser.parse_args()
 
     if args.env_file.exists():
@@ -71,7 +90,7 @@ def main() -> None:
     else:
         parser.error("pass --config <file> or --all")
 
-    names = [generate_one(c, args.out) for c in configs]
+    names = [generate_one(c, args.out, shell=args.shell) for c in configs]
     write_index(args.out, names)
 
 

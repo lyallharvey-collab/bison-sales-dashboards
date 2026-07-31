@@ -1,12 +1,14 @@
 name: Deploy dashboards
 
-# Live data no longer comes from this workflow — the bison-dashboard-refresher
-# Cloudflare Worker pulls Odoo on its own 2-minute Cron Trigger and writes to
-# KV; Pages Functions serve that live data on every page load. This workflow
-# only (re)deploys the static HTML/CSS/JS shell (and a baked-in fallback
-# payload for first paint) when the template/config/Worker source changes —
-# occasional, not continuous, which is what keeps this off GitHub's billed
-# Actions minutes at any real volume.
+# This workflow deploys the HTML shell only. Live figures are fetched by the
+# page itself from the Pages Function in functions/<dashboard>/data.json.js,
+# which queries Odoo at request time — so nothing here needs Odoo credentials,
+# and nothing here runs on a schedule. It fires only when the source of the
+# shell changes, which keeps it off GitHub's billed Actions minutes.
+#
+# Because it renders with --shell, this job has NO access to Odoo. That is
+# deliberate: the only place Odoo credentials now exist is as Cloudflare Pages
+# secrets, reachable solely by the Function behind Cloudflare Access.
 on:
   push:
     branches: [main]
@@ -16,6 +18,7 @@ on:
       - "dashboards/**"
       - "scripts/**"
       - "functions/**"
+      - "lib/**"
       - ".github/workflows/refresh.yml"
   workflow_dispatch: {}   # trigger a redeploy manually from the Actions tab
 
@@ -38,16 +41,21 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Generate dashboards
-        env:
-          ODOO_URL: ${{ secrets.ODOO_URL }}
-          ODOO_DB: ${{ secrets.ODOO_DB }}
-          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
-          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
-        run: python scripts/generate.py --all
+      - name: Render dashboard shells (no Odoo access)
+        run: python scripts/generate.py --all --shell
 
-      - name: Include Pages Functions (live-data endpoints)
+      - name: Include Pages Functions (the live-data endpoints)
         run: cp -r functions output/
+
+      # The Functions import from lib/, which sits outside output/. Wrangler
+      # bundles those imports at deploy time, so lib/ must be present in the
+      # checkout (it is) — no copy needed, but a missing lib/ would fail the
+      # deploy here rather than silently shipping a broken endpoint.
+      - name: Sanity-check the shared data layer is present
+        run: test -f lib/index.js && test -f lib/xmlrpc.js
+
+      - name: Unit-test the data layer
+        run: node lib/xmlrpc.test.mjs && node lib/dates.test.mjs
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1

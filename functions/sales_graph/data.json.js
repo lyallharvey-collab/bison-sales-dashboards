@@ -1,26 +1,31 @@
-// Cloudflare Pages Function — intercepts /sales_graph/data.json and serves
-// the live payload from KV (written every 2 minutes by the
-// bison-dashboard-refresher Worker) instead of a static build-time file.
-// Lives on the same domain/zone as the rest of the Pages project, so it
-// inherits the same Cloudflare Access policy already gating the dashboard —
-// no separate auth to configure, and nothing new to accidentally leave open.
+import { buildDashboardPayload } from '../../lib/index.js';
+
+// Serves GET /sales_graph/data.json by querying Odoo on demand.
 //
-// Both dashboards' payloads live under one KV key ("dashboards") rather than
-// one key each — Workers KV's free tier caps writes at 1,000/day, and two
-// keys at a 2-minute cron would be 1,440/day, over the cap.
+// This is now the ONLY thing that talks to Odoo in production — there is no
+// cron Worker and no KV cache in front of it. That is deliberate: the
+// Worker/KV/cron arrangement this replaced had three moving parts, its own
+// daily write quota, and a duplicate copy of the config, all to avoid doing
+// the query at request time. Doing it at request time is simpler and the
+// query volume is trivial (a screen polling every 2 minutes).
+//
+// It sits on the same domain as the dashboard HTML, so Cloudflare Access
+// gates it with the same policy — there is no separate auth to configure and
+// no unauthenticated path to this data. Verified by requesting it without a
+// session and confirming the redirect to the Access login.
 export async function onRequestGet({ env }) {
-  const raw = await env.DASHBOARD_DATA.get('dashboards');
-  if (!raw) {
-    return new Response(JSON.stringify({ error: 'no data yet' }), {
-      status: 503,
-      headers: { 'content-type': 'application/json' },
+  try {
+    const payload = await buildDashboardPayload(env, 'sales_graph');
+    return new Response(JSON.stringify(payload), {
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    });
+  } catch (e) {
+    // Surface the reason rather than a bare 500: the page keeps showing the
+    // last good data and raises its stale banner, so a readable error here is
+    // the only breadcrumb for why it stopped updating.
+    return new Response(JSON.stringify({ error: String((e && e.message) || e) }), {
+      status: 502,
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
     });
   }
-  const all = JSON.parse(raw);
-  return new Response(JSON.stringify(all.sales_graph), {
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'no-store',
-    },
-  });
 }

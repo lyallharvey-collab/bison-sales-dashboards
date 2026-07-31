@@ -427,13 +427,16 @@ async function refresh() {
   }
 }
 
-// Initial paint uses the data baked in at generation time — no fetch needed
-// for first render, so the screen shows something immediately even if the
-// network is briefly unavailable. The live data source (a Worker on its own
-// cron) now updates far more often than this HTML is redeployed, so the
-// baked-in payload can be meaningfully stale — kick off a live refresh right
-// away rather than waiting a full interval to find out.
-applyPayload({{ data | tojson }});
+// CI deploys a shell with no data in it (has_data false), because the live
+// figures are fetched from this page's own /data.json at request time. When
+// the generator IS run with real data (local preview), paint it immediately so
+// there's something on screen before the first fetch resolves.
+const BAKED = {{ data | tojson }};
+if (BAKED.has_data !== false) {
+  applyPayload(BAKED);
+} else {
+  document.getElementById('updated-at').textContent = 'Loading…';
+}
 refresh();
 setInterval(refresh, REFRESH_MS);
 

@@ -1,6 +1,2 @@
 name = "bison-dashboards"
 pages_build_output_dir = "output"
-
-[[kv_namespaces]]
-binding = "DASHBOARD_DATA"
-id = "d00237a9645f4ed1a00a001771316e9a"

@@ -1,18 +1,17 @@
-// See functions/sales_graph/data.json.js for the design note — same idea,
-// reading the 'sales_dashboard' portion of the combined KV entry.
+import { buildDashboardPayload } from '../../lib/index.js';
+
+// See functions/sales_graph/data.json.js for the design note — same shape,
+// building the multi-panel payload instead.
 export async function onRequestGet({ env }) {
-  const raw = await env.DASHBOARD_DATA.get('dashboards');
-  if (!raw) {
-    return new Response(JSON.stringify({ error: 'no data yet' }), {
-      status: 503,
-      headers: { 'content-type': 'application/json' },
+  try {
+    const payload = await buildDashboardPayload(env, 'sales_dashboard');
+    return new Response(JSON.stringify(payload), {
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: String((e && e.message) || e) }), {
+      status: 502,
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
     });
   }
-  const all = JSON.parse(raw);
-  return new Response(JSON.stringify(all.sales_dashboard), {
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'no-store',
-    },
-  });
 }
