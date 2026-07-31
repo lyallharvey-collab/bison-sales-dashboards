@@ -380,73 +380,37 @@ const zeroLine = {
   }
 };
 
-// Direct labels at the end of each line. Two reasons: it removes the
-// colour-matching lookup between a stat tile and a line on the far side of a
-// TV, and it gives identity a non-colour channel — which is what makes the
-// blue/green pair safe for colourblind viewers rather than borderline.
-// The dot carries the series colour; the text stays in normal ink.
-const directLabels = {
-  id: 'directLabels',
-  afterDatasetsDraw(c) {
-    const ctx = c.ctx;
-    const fg = cssVar('--fg') || '#111';
-    const size = Math.round(19 * scale);
-    ctx.save();
-    ctx.font = `600 ${size}px ${cssVar('--font-family') || 'sans-serif'}`;
-    ctx.textBaseline = 'middle';
-    const dot = Math.max(3, 4 * scale);
-
-    // Collect first, then de-collide, then draw. Lines converge near month-end,
-    // so drawing as we go leaves labels stacked on top of each other.
-    const items = [];
-    c.data.datasets.forEach((ds, di) => {
-      const meta = c.getDatasetMeta(di);
-      if (meta.hidden || ds.$noLabel) return;
-      let last = -1;
-      ds.data.forEach((v, i) => { if (v !== null && v !== undefined) last = i; });
-      if (last < 0 || !meta.data[last]) return;
-      const pt = meta.data[last];
-      const w = ctx.measureText(ds.label).width;
-      // Flip inside when close to the right edge, so a label is never clipped.
-      const flip = (c.chartArea.right - pt.x) < w + dot * 4 + 10;
-      items.push({
-        y: pt.y, anchorY: pt.y, x: pt.x, w, flip,
-        text: ds.label, color: ds.borderColor,
-      });
-    });
-
-    const laid = DV
-      ? DV.layoutLabels(items, c.chartArea.top + size, c.chartArea.bottom - size, size * 1.3)
-      : items;
-
-    laid.forEach((it) => {
-      const tx = it.flip ? it.x - (it.w + dot * 3 + 6) : it.x + dot * 3 + 6;
-      // When a label has been nudged off its line, draw a faint tick back to
-      // the actual data point so the association stays unambiguous.
-      if (Math.abs(it.y - it.anchorY) > 1.5) {
-        ctx.strokeStyle = withAlpha(it.color, 0.5);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(it.x, it.anchorY);
-        ctx.lineTo(it.flip ? tx + it.w + dot : it.x + dot * 2, it.y);
-        ctx.stroke();
-      }
-      ctx.beginPath();
-      ctx.arc(it.flip ? tx - dot * 2 : it.x + dot * 2, it.y, dot, 0, Math.PI * 2);
-      ctx.fillStyle = it.color;
-      ctx.fill();
-      ctx.fillStyle = withAlpha(fg, 0.85);
-      ctx.fillText(it.text, tx, it.y);
-    });
-    ctx.restore();
-  }
-};
-
 function buildDatasets(payload) {
+  const STATUS = (DV && DV.STATUS) || { good: '#0ca30c', bad: '#d03b3b' };
   return payload.series.map(s => {
     const ref = isReference(s);
     const proj = !!s.is_projection;
+    // The view decides the mark, not a user-facing chart-type picker.
+    if (s.mark === 'bar') {
+      // Colour means good/bad here, not identity — and the sign is also encoded
+      // by sitting above or below the zero line, so colour is never the only
+      // channel. Rounded data-ends anchored to the baseline.
+      const bySign = !!s.colorBySign;
+      const paint = (ctx) => {
+        const v = ctx.parsed ? ctx.parsed.y : null;
+        if (!bySign) return s.color;
+        return (v === null || v === undefined || v >= 0) ? STATUS.good : STATUS.bad;
+      };
+      return {
+        type: 'bar',
+        label: s.label,
+        data: s.data,
+        backgroundColor: bySign ? paint : withAlpha(s.color, 0.85),
+        borderColor: bySign ? paint : s.color,
+        borderWidth: 0,
+        borderRadius: 4,
+        borderSkipped: false,
+        categoryPercentage: 0.82,
+        barPercentage: 0.9,
+      };
+    }
     return {
+      type: 'line',
       label: s.label,
       data: s.data,
       // The dashed continuation is the same colour as, and starts exactly on,
@@ -505,8 +469,10 @@ function renderChart(payload) {
   const grid = withAlpha(fg, 0.14);
   const axisFontSize = Math.round(22 * scale);
 
+  const anyBar = payload.series.some(s => s.mark === 'bar');
   chart = new Chart(document.getElementById('chart').getContext('2d'), {
-    type: payload.chart_type || 'line',
+    // Mixed charts are fine — this is one shared y-axis, never two.
+    type: anyBar ? 'bar' : (payload.chart_type || 'line'),
     data: { labels: payload.labels, datasets },
     options: {
       responsive: true,
@@ -567,7 +533,7 @@ function renderChart(payload) {
         },
       },
     },
-    plugins: [todayLine, zeroLine, directLabels],
+    plugins: [todayLine, zeroLine],
   });
   chart.$zeroBaseline = !!payload.zeroBaseline;
 }

@@ -11,14 +11,25 @@
  * and without any load-order surprises. Node can still test it — see
  * lib/views.test.mjs, which runs this file in a vm.
  *
+ * Each view also pins the right MARK, not just the right numbers — that is the
+ * point of naming views by question rather than offering a chart-type picker:
+ *   cumulative  line   a running total is a trend
+ *   daily       bar    discrete per-day amounts are magnitudes, not a trend
+ *   variance    bar    above/below a baseline, coloured by sign
+ *   projection  line   trend, plus a dashed continuation
+ *
  * Two deliberate omissions, both anti-patterns:
- *   - No "chart type" switch. Views are named by the QUESTION they answer, so
- *     each one pins the correct form. A free type picker is how you end up
- *     plotting cumulative money as bars, or two scales on one axis.
+ *   - No free "chart type" switch, for the reason above.
  *   - No second y-axis, ever.
  */
 (function (global) {
   'use strict';
+
+  // Status colours, for the one view where colour means good/bad rather than
+  // identity. Taken from the design system's fixed status palette (both clear
+  // 3:1 on a light surface). Sign is also encoded by position above/below the
+  // zero line, so colour is never the only channel.
+  var STATUS = { good: '#0ca30c', bad: '#d03b3b' };
 
   // --------------------------------------------------------------- mode/view
   // Read from the URL, never from persisted state: a wall screen must come
@@ -128,11 +139,17 @@
     }
 
     if (view === 'daily') {
+      // Actuals become columns — a day's contribution is a magnitude to
+      // compare, not a trend to trace. The targets stay as thin lines, because
+      // they're the threshold those columns are being judged against.
       return Object.assign({}, panel, {
         view: view,
         zeroBaseline: true,
         series: panel.series.map(function (s) {
-          return Object.assign({}, s, { data: toDaily(s.data) });
+          return Object.assign({}, s, {
+            data: toDaily(s.data),
+            mark: isReference(s) ? 'line' : 'bar',
+          });
         }),
       });
     }
@@ -142,17 +159,23 @@
       // Without a reference series there is nothing to be "vs", so fall back
       // rather than inventing a baseline of zero.
       if (!baseline) return applyView(panel, 'cumulative');
+      // ONE series only, as diverging columns coloured by sign. Two grouped
+      // variance series would need colour for identity and for sign at the
+      // same time, and colour can only carry one job — so this is the
+      // emphasis case: the primary actual is the point.
+      var primary = parts.actuals[0];
+      if (!primary) return applyView(panel, 'cumulative');
       return Object.assign({}, panel, {
         view: view,
         zeroBaseline: true,
         baseline_label: baseline.label,
-        series: parts.actuals.map(function (s) {
-          return Object.assign({}, s, {
-            data: subtract(s.data, baseline.data),
-            is_reference: false,
-            label: s.label + ' vs ' + baseline.label.toLowerCase(),
-          });
-        }),
+        series: [Object.assign({}, primary, {
+          data: subtract(primary.data, baseline.data),
+          is_reference: false,
+          mark: 'bar',
+          colorBySign: true,
+          label: primary.label + ' vs ' + baseline.label.toLowerCase(),
+        })],
       });
     }
 
@@ -230,35 +253,8 @@
     };
   }
 
-  /**
-   * Push a set of direct labels apart so they never overlap.
-   *
-   * Needed because several lines converge near the right-hand side by
-   * month-end — Breakeven and Invoiced landed on top of each other, which is
-   * exactly the clipped/collided label case that makes direct labelling worse
-   * than no labelling. Keeps original order by y, spaces them by minGap, then
-   * shifts the whole stack back inside [top, bottom] if it overflowed.
-   *
-   * Mutates and returns the items, sorted by final y.
-   */
-  function layoutLabels(items, top, bottom, minGap) {
-    var sorted = items.slice().sort(function (a, b) { return a.y - b.y; });
-    var prev = -Infinity;
-    sorted.forEach(function (it) {
-      it.y = Math.max(it.y, prev + minGap);
-      prev = it.y;
-    });
-    if (sorted.length) {
-      var over = sorted[sorted.length - 1].y - bottom;
-      if (over > 0) sorted.forEach(function (it) { it.y -= over; });
-      var under = top - sorted[0].y;
-      if (under > 0) sorted.forEach(function (it) { it.y += under; });
-    }
-    return sorted;
-  }
-
   var API = {
-    layoutLabels: layoutLabels,
+    STATUS: STATUS,
     readMode: readMode,
     readView: readView,
     VIEW_ORDER: VIEW_ORDER,

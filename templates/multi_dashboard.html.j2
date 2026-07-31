@@ -46,12 +46,11 @@
   .panel-line-chart .chart-holder { flex: 1; min-height: 0; position: relative; }
   .panel-line-chart canvas { width: 100% !important; height: 100% !important; }
 
-  /* Per-panel figures, so a wall viewer reads the number instead of estimating
-     it off an axis. Kiosk only: on desktop the hover tooltip covers this, and
-     the space is better spent on the chart. One line to show in both if wanted.
-     FUNCTIONAL, NOT DESIGNED — for Claude Design to restyle. */
-  .panel-stats { flex: none; display: flex; gap: 1.2vw; padding: 0 0 1vh; flex-wrap: wrap; }
-  :root[data-mode="desktop"] .panel-stats { display: none; }
+  /* Legend + current figures, UNDERNEATH the chart, colour-keyed to each line.
+     Replaces the end-of-line direct labels, which collided where the lines
+     converge and were redundant next to the figures. Shown in both modes: it is
+     the legend, so it can't be desktop-only. FUNCTIONAL, NOT DESIGNED. */
+  .panel-stats { flex: none; display: flex; gap: 1.2vw; padding: 0.8vh 0 0; flex-wrap: wrap; }
   .panel-stats .ps { display: flex; align-items: baseline; gap: 0.45vw; min-width: 0; }
   .panel-stats .dot { width: 1.1vh; height: 1.1vh; border-radius: 50%; flex: none; }
   .panel-stats .lab { font-size: calc(1.5vh * var(--scale)); opacity: 0.6; font-weight: 600; white-space: nowrap; }
@@ -141,8 +140,8 @@
         {% if panel.type != 'kpi' %}<div class="panel-header">{{ panel.title }}</div>{% endif %}
         <div class="panel-body">
           {% if panel.type == 'line_chart' %}
-            <div class="panel-stats" id="panel-stats-{{ panel.id }}"></div>
             <div class="chart-holder"><canvas id="chart-{{ panel.id }}"></canvas></div>
+            <div class="panel-stats" id="panel-stats-{{ panel.id }}"></div>
           {% elif panel.type == 'kpi' %}
             <div class="kpi-value" id="kpi-value-{{ panel.id }}"></div>
             <div class="kpi-caption" id="kpi-caption-{{ panel.id }}"></div>
@@ -406,10 +405,32 @@ function hasNegative(panel) {
 }
 
 function buildDatasetsFor(panel) {
+  const STATUS = (DV && DV.STATUS) || { good: '#0ca30c', bad: '#d03b3b' };
   return panel.series.map((s) => {
     const ref = isReference(s);
     const proj = !!s.is_projection;
+    if (s.mark === 'bar') {
+      const bySign = !!s.colorBySign;
+      const paint = (ctx) => {
+        const v = ctx.parsed ? ctx.parsed.y : null;
+        if (!bySign) return s.color;
+        return (v === null || v === undefined || v >= 0) ? STATUS.good : STATUS.bad;
+      };
+      return {
+        type: 'bar',
+        label: s.label,
+        data: s.data,
+        backgroundColor: bySign ? paint : withAlpha(s.color, 0.85),
+        borderColor: bySign ? paint : s.color,
+        borderWidth: 0,
+        borderRadius: 4,
+        borderSkipped: false,
+        categoryPercentage: 0.82,
+        barPercentage: 0.9,
+      };
+    }
     return {
+      type: 'line',
       label: s.label,
       data: s.data,
       $noLabel: proj,
@@ -468,8 +489,9 @@ function renderLineChartPanel(panel) {
   const grid = withAlpha(fg, 0.14);
   const axisFontSize = Math.round(17 * scale);
 
+  const anyBar = panel.series.some((s) => s.mark === 'bar');
   chart = new Chart(canvas.getContext('2d'), {
-    type: panel.chart_type || 'line',
+    type: anyBar ? 'bar' : (panel.chart_type || 'line'),
     data: { labels: panel.labels, datasets },
     options: {
       responsive: true,
@@ -528,7 +550,6 @@ function renderLineChartPanel(panel) {
     plugins: [
       makeTodayLinePlugin(panel.id),
       makeZeroLinePlugin(panel.id),
-      makeDirectLabelsPlugin(panel.id),
     ],
   });
   chart.$zeroBaseline = !!panel.zeroBaseline;
