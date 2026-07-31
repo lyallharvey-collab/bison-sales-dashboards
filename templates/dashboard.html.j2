@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ data.title }}</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<!-- View derivations + kiosk/desktop mode. Shared by both dashboards and
+     unit-tested in lib/views.test.mjs. -->
+<script src="/static/views.js"></script>
 <style>
   :root {
     --bg: {{ theme.get('background', '#ffffff') }};
@@ -88,6 +91,31 @@
     letter-spacing: 0.02em;
   }
 
+  /* View switcher. FUNCTIONAL, NOT DESIGNED — this is deliberately plain so
+     Claude Design can restyle it (or move it into a sidebar) without having to
+     unpick opinionated CSS. The behaviour is the part that matters: it edits
+     the URL, so a reload keeps the view.
+     Hidden in kiosk mode: a wall screen has nobody to click it, and a control
+     nobody watches is a way for the wall to end up stuck on the wrong view. */
+  .viewbar {
+    flex: none; display: flex; align-items: center; gap: 0.6vw;
+    padding: 0 3.3vw 1.4vh;
+  }
+  :root[data-mode="kiosk"] .viewbar { display: none; }
+  .viewbar button {
+    font: inherit; font-size: calc(1.7vh * var(--scale)); font-weight: 600;
+    padding: 0.7vh 1.1vw; cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--fg) 22%, transparent);
+    background: transparent; color: var(--fg); border-radius: 999px;
+  }
+  .viewbar button[aria-pressed="true"] {
+    background: var(--fg); color: var(--bg);
+    border-color: var(--fg);
+  }
+  .viewbar .hint {
+    font-size: calc(1.5vh * var(--scale)); opacity: 0.55; margin-left: 0.6vw;
+  }
+
   /* Zoom control — deliberately understated (this is a wall display, not an
      app): a translucent pill in the corner that only asserts itself once
      someone's mouse/remote actually finds it. */
@@ -124,6 +152,7 @@
     </div>
   </div>
   <div class="stats" id="stats-row"></div>
+  <div class="viewbar" id="viewbar"></div>
   <div class="chart-wrap"><div class="chart-inner"><canvas id="chart"></canvas></div></div>
 
   <div class="zoom-ctl" id="zoom-ctl">
@@ -143,6 +172,51 @@ let todayIdx = -1;
 let lastPayload = null;
 
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// --- Mode and view, both read from the URL ---------------------------------
+// Deliberately NOT persisted: a wall screen bookmarked to ?mode=kiosk must come
+// back to kiosk after a reload, a power cut or the 6h safety refresh, and
+// nothing anyone does at a desk should be able to change what the wall shows.
+// (Zoom stays in localStorage — that one really is per-screen calibration.)
+const DV = window.DashboardViews || null;
+const MODE = DV ? DV.readMode(location.search) : 'desktop';
+let currentView = DV ? DV.readView(location.search, 'cumulative') : 'cumulative';
+document.documentElement.dataset.mode = MODE;
+
+function setView(next, { pushUrl = true } = {}) {
+  if (!DV || next === currentView) return;
+  currentView = next;
+  if (pushUrl) {
+    const u = new URL(location.href);
+    if (next === 'cumulative') u.searchParams.delete('view');
+    else u.searchParams.set('view', next);
+    history.replaceState(null, '', u);
+  }
+  renderViewbar();
+  // The scale config differs between views (a variance chart straddles zero),
+  // so rebuild rather than mutate.
+  if (chart) { chart.destroy(); chart = null; }
+  if (lastPayload) applyPayload(lastPayload);
+}
+
+function renderViewbar() {
+  const bar = document.getElementById('viewbar');
+  if (!bar || !DV) return;
+  if (MODE === 'kiosk') { bar.innerHTML = ''; return; }
+  bar.innerHTML = '';
+  DV.VIEW_ORDER.forEach((v) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = DV.VIEW_LABELS[v];
+    b.setAttribute('aria-pressed', String(v === currentView));
+    b.addEventListener('click', () => setView(v));
+    bar.appendChild(b);
+  });
+  const hint = document.createElement('span');
+  hint.className = 'hint';
+  hint.textContent = DV.VIEW_HINTS[currentView] || '';
+  bar.appendChild(hint);
+}
 
 // --- Zoom control: overall text/line scale, adjustable on the page and
 // persisted so it survives data refreshes and the 6h safety-net reload. ---
@@ -285,17 +359,105 @@ const todayLine = {
   }
 };
 
+// A solid hairline at y=0, for views where zero means something (per-day,
+// vs-target). Solid, not dashed: dashed rules read as "threshold/projection",
+// which is what the pace lines already use.
+const zeroLine = {
+  id: 'zeroLine',
+  beforeDatasetsDraw(c) {
+    if (!c.$zeroBaseline) return;
+    const y = c.scales.y.getPixelForValue(0);
+    if (!isFinite(y)) return;
+    const ctx = c.ctx;
+    ctx.save();
+    ctx.strokeStyle = withAlpha(cssVar('--fg') || '#111', 0.45);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(c.chartArea.left, y);
+    ctx.lineTo(c.chartArea.right, y);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
+// Direct labels at the end of each line. Two reasons: it removes the
+// colour-matching lookup between a stat tile and a line on the far side of a
+// TV, and it gives identity a non-colour channel — which is what makes the
+// blue/green pair safe for colourblind viewers rather than borderline.
+// The dot carries the series colour; the text stays in normal ink.
+const directLabels = {
+  id: 'directLabels',
+  afterDatasetsDraw(c) {
+    const ctx = c.ctx;
+    const fg = cssVar('--fg') || '#111';
+    const size = Math.round(19 * scale);
+    ctx.save();
+    ctx.font = `600 ${size}px ${cssVar('--font-family') || 'sans-serif'}`;
+    ctx.textBaseline = 'middle';
+    const dot = Math.max(3, 4 * scale);
+
+    // Collect first, then de-collide, then draw. Lines converge near month-end,
+    // so drawing as we go leaves labels stacked on top of each other.
+    const items = [];
+    c.data.datasets.forEach((ds, di) => {
+      const meta = c.getDatasetMeta(di);
+      if (meta.hidden || ds.$noLabel) return;
+      let last = -1;
+      ds.data.forEach((v, i) => { if (v !== null && v !== undefined) last = i; });
+      if (last < 0 || !meta.data[last]) return;
+      const pt = meta.data[last];
+      const w = ctx.measureText(ds.label).width;
+      // Flip inside when close to the right edge, so a label is never clipped.
+      const flip = (c.chartArea.right - pt.x) < w + dot * 4 + 10;
+      items.push({
+        y: pt.y, anchorY: pt.y, x: pt.x, w, flip,
+        text: ds.label, color: ds.borderColor,
+      });
+    });
+
+    const laid = DV
+      ? DV.layoutLabels(items, c.chartArea.top + size, c.chartArea.bottom - size, size * 1.3)
+      : items;
+
+    laid.forEach((it) => {
+      const tx = it.flip ? it.x - (it.w + dot * 3 + 6) : it.x + dot * 3 + 6;
+      // When a label has been nudged off its line, draw a faint tick back to
+      // the actual data point so the association stays unambiguous.
+      if (Math.abs(it.y - it.anchorY) > 1.5) {
+        ctx.strokeStyle = withAlpha(it.color, 0.5);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(it.x, it.anchorY);
+        ctx.lineTo(it.flip ? tx + it.w + dot : it.x + dot * 2, it.y);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(it.flip ? tx - dot * 2 : it.x + dot * 2, it.y, dot, 0, Math.PI * 2);
+      ctx.fillStyle = it.color;
+      ctx.fill();
+      ctx.fillStyle = withAlpha(fg, 0.85);
+      ctx.fillText(it.text, tx, it.y);
+    });
+    ctx.restore();
+  }
+};
+
 function buildDatasets(payload) {
   return payload.series.map(s => {
     const ref = isReference(s);
+    const proj = !!s.is_projection;
     return {
       label: s.label,
       data: s.data,
+      // The dashed continuation is the same colour as, and starts exactly on,
+      // the solid line it extends — so labelling it again would just add
+      // clutter for no identity gain.
+      $noLabel: proj,
       borderColor: s.color,
-      backgroundColor: ref ? 'transparent' : withAlpha(s.color, 0.07),
-      fill: ref ? false : 'origin',
-      borderWidth: (ref ? 2 : 3) * scale,
-      borderDash: ref ? [12 * scale, 10 * scale] : [],
+      backgroundColor: (ref || proj) ? 'transparent' : withAlpha(s.color, 0.07),
+      fill: (ref || proj) ? false : 'origin',
+      borderWidth: (ref ? 2 : proj ? 2 : 3) * scale,
+      borderDash: ref ? [12 * scale, 10 * scale] : proj ? [4 * scale, 6 * scale] : [],
       pointRadius: 0,
       pointHoverRadius: 6 * scale,
       pointHoverBorderWidth: 2 * scale,
@@ -316,13 +478,20 @@ function fmtTooltipDate(label) {
   });
 }
 
+function hasNegative(payload) {
+  return payload.series.some(s => s.data.some(v => v !== null && v !== undefined && v < 0));
+}
+
 function renderChart(payload) {
   const datasets = buildDatasets(payload);
-  const nice = niceScale(seriesMax(payload), 10);
+  // Round-number gridlines only work when the axis starts at zero and climbs.
+  // The vs-target view straddles zero, so let Chart.js scale that one.
+  const nice = hasNegative(payload) ? null : niceScale(seriesMax(payload), 10);
 
   if (chart) {
     chart.data.labels = payload.labels;
     chart.data.datasets = datasets;
+    chart.$zeroBaseline = !!payload.zeroBaseline;
     if (nice) {
       chart.options.scales.y.max = nice.max;
       chart.options.scales.y.ticks.stepSize = nice.step;
@@ -398,15 +567,20 @@ function renderChart(payload) {
         },
       },
     },
-    plugins: [todayLine],
+    plugins: [todayLine, zeroLine, directLabels],
   });
+  chart.$zeroBaseline = !!payload.zeroBaseline;
 }
 
 function applyPayload(payload) {
   lastPayload = payload;
+  // Stat cards, progress and the today marker always describe the real
+  // month-to-date figures, whichever view the chart is showing — the view
+  // changes how the shape is drawn, not what the numbers are.
   renderProgress(payload);
   renderStats(payload);
-  renderChart(payload);
+  renderChart(DV ? DV.applyView(payload, currentView) : payload);
+  renderViewbar();
   const stamp = new Date(payload.generated_at);
   document.getElementById('updated-at').textContent =
     stamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

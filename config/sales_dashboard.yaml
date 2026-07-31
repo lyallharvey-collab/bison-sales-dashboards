@@ -71,7 +71,7 @@ panels:
     series:
       - key: target
         label: "Target"
-        color: "#3949ab"
+        color: "#8e24aa"   # Target is purple on every chart (colour follows the entity)
         source: read_group
         model: x_daily_sales_targets
         domain: []
@@ -81,7 +81,7 @@ panels:
         extend: true
       - key: orders
         label: "Orders"
-        color: "#42a5f5"
+        color: "#1e88e5"   # was #42a5f5 — only 2.58:1 on white, too faint for a TV
         source: orders_ytd_monthly_component
         cumulative: true
         extend: false

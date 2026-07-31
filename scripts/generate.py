@@ -15,6 +15,7 @@ local preview and for the JS/Python parity check (npm run livetest).
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -54,6 +55,21 @@ def generate_one(config_path: Path, out_root: Path, shell: bool = False) -> str:
     return cfg.name
 
 
+def copy_static(out_root: Path) -> None:
+    """Copy static/ to output/static/. The templates load /static/views.js from
+    there — the view derivations (per-day, vs-target, projection) and the
+    kiosk/desktop mode switch. Kept as a served file rather than inlined per
+    template so both dashboards share one copy, and so it can be unit-tested
+    directly (lib/views.test.mjs)."""
+    src = ROOT / "static"
+    if not src.is_dir():
+        return
+    dest = out_root / "static"
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(src, dest)
+    print(f"[static] copied {len(list(dest.glob('*')))} file(s) to {dest}")
+
+
 def write_index(out_root: Path, names: list[str]) -> None:
     """A tiny landing page linking every generated dashboard, so the Pages
     site root isn't a 404 — point the TV at /<name>/ directly once you know
@@ -91,6 +107,7 @@ def main() -> None:
         parser.error("pass --config <file> or --all")
 
     names = [generate_one(c, args.out, shell=args.shell) for c in configs]
+    copy_static(args.out)
     write_index(args.out, names)
 
 
