@@ -52,10 +52,10 @@ jobs:
       # checkout (it is) — no copy needed, but a missing lib/ would fail the
       # deploy here rather than silently shipping a broken endpoint.
       - name: Sanity-check the shared data layer is present
-        run: test -f lib/index.js && test -f lib/xmlrpc.js
+        run: test -f lib/index.js && test -f lib/jsonrpc.js
 
       - name: Unit-test the data layer
-        run: node lib/xmlrpc.test.mjs && node lib/dates.test.mjs
+        run: npm test
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1

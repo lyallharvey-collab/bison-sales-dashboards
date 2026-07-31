@@ -19,7 +19,7 @@ dashboard that queries Odoo when asked.
 ```
 Cloudflare Pages Function  functions/<dashboard>/data.json.js
   → serves GET /<dashboard>/data.json
-  → queries Odoo at request time (hand-rolled XML-RPC over fetch, lib/)
+  → queries Odoo at request time via /jsonrpc (lib/)
   → computes cumulative sums, weekend folding, CRM weighting, returns JSON
   → Odoo credentials are Pages secrets; nothing else can reach them
   → same domain as the HTML, so Cloudflare Access gates it with the same
@@ -63,14 +63,26 @@ volume the cron was doing, so nothing is worse off for load.
 
 ### Two things to know about the current design
 
-**The 10ms CPU ceiling still applies.** Pages Functions run on the same
-runtime as Workers, so the free tier's 10ms CPU/invocation limit is still
-overhead. The `read_group` change bought real headroom, but this is a ceiling,
-not a solved problem: as CRM and order volume grow it can be breached again.
-The symptom is a `502` from `/data.json` and the stale banner appearing on the
-screens. **The fix if that happens is the Workers Standard plan at $5/month**,
-which raises the limit to 30s and makes the issue permanently moot. Worth
-glancing at Cloudflare's Workers analytics (Errors, CPU time P90) occasionally.
+**The 10ms CPU ceiling applies, but there is now ~18x headroom.** Pages
+Functions run on the Workers runtime, so the free tier's 10ms CPU/invocation
+limit is overhead. Measured with `npm run cpucheck`:
+
+| | XML-RPC (original) | JSON-RPC (current) |
+|---|---|---|
+| Parsing, per request | **11.28 ms** — over budget by itself | **0.57 ms** |
+| Share of the 10 ms budget | >100% | **5.7%** |
+| Data received | 283 KB | 62 KB |
+| Wall clock | 6.3 s | 2.3 s |
+
+Two changes got it there: Odoo's `/jsonrpc` endpoint instead of `/xmlrpc/2/*`
+(native `JSON.parse` rather than a hand-written parser — ~35x cheaper on the
+same data, verified identical results), and request-scoped call dedup in
+`OdooClient` so repeats like the subscription-name lookup happen once.
+
+Run `npm run cpucheck` before adding a panel or if the screens go stale — it
+prints the per-call breakdown and warns above 50% of budget. **If it is ever
+genuinely breached, the fix is the Workers Standard plan at $5/month** (30s
+CPU), not an architecture change.
 
 **The aggregation logic exists in two languages.** `dashboards/*.py`
 (Python/pandas) and `lib/*.js` are independent implementations of the same
@@ -88,17 +100,20 @@ design and it is not an oversight.
 ```
 sales-dashboards/
   dashboards/
-    odoo_client.py       OdooClient (XML-RPC), + read_group
-    data_sources.py      generic read_group-by-day helper
-    special_sources.py   the one composite source Orders needs (see below)
+    odoo_client.py       OdooClient (XML-RPC — fine here, no CPU limit)
+    data_sources.py      generic read_group-by-day/-month helpers
+    special_sources.py   composite sources (the Orders line, see below)
+    crm_sources.py       the KPI count and the pipeline table
     config_schema.py     YAML -> DashboardConfig/SeriesConfig
     build.py             config -> data.json payload (cumulative sums, pandas)
+    shell_build.py       config -> data-less payload for the deployed HTML
     render.py            payload -> index.html + data.json (Jinja2)
   templates/
-    dashboard.html.j2     Chart.js + CSS-variable theme + fetch/redraw JS
+    dashboard.html.j2       single-chart TV layout
+    multi_dashboard.html.j2 multi-panel grid layout
   config/
-    sales_graph.yaml      the first dashboard
-    shell_build.py       config -> data-less payload for the deployed HTML
+    sales_graph.yaml      single-chart dashboard
+    sales_dashboard.yaml  multi-panel dashboard
   scripts/
     generate.py           CLI entrypoint (--shell for the no-Odoo render)
   functions/              Cloudflare Pages Functions. THE only thing that
@@ -107,7 +122,8 @@ sales-dashboards/
     <dashboard>/data.json.js
   lib/                    the JS data layer the Functions import (a parallel
                           implementation of dashboards/*.py — see Architecture)
-    xmlrpc.js              hand-rolled XML-RPC codec (no DOMParser in Workers)
+    jsonrpc.js             JSON-RPC codec (replaced a hand-rolled XML parser;
+                           see the CPU table above for why)
     index.js               buildDashboardPayload(env, name)
     *.test.mjs             unit tests — `npm test`, no network or creds needed
     *.livetest.mjs         live-Odoo tests + the JS-vs-Python parity check —
@@ -160,7 +176,7 @@ that's expected, and it's why production must be verified separately (see
 Tests:
 
 ```bash
-npm test        # unit tests: XML-RPC codec + date/weekend logic. No creds.
+npm test        # unit tests: JSON-RPC codec + date/weekend logic. No creds.
 npm run livetest # hits live Odoo, then diffs JS output against Python output
 ```
 

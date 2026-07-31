@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node lib/xmlrpc.test.mjs && node lib/dates.test.mjs",
+    "test": "node lib/jsonrpc.test.mjs && node lib/dates.test.mjs",
     "livetest": "node lib/odooClient.livetest.mjs && node lib/compare.livetest.mjs",
+    "cpucheck": "node lib/cpubudget.probe.mjs",
     "deploy": "wrangler pages deploy output --project-name bison-dashboards --commit-dirty=true"
   },
   "devDependencies": {
