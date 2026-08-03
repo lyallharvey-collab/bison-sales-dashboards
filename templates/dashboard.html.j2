@@ -344,8 +344,16 @@ function renderProgress(payload) {
   const el = document.getElementById('progress');
   const actuals = payload.series.filter(s => !isReference(s));
   const idx = actuals.length ? Math.max(...actuals.map(lastFilled)) : payload.labels.length - 1;
-  todayIdx = idx;
   el.textContent = idx >= 0 ? `Day ${idx + 1} of ${payload.labels.length}` : '';
+}
+
+// The marker has to be positioned in the coordinates of the series actually
+// DRAWN, which is the view-transformed payload — the cumulative and projection
+// views prepend a zero origin, so a raw index would sit one day too far left.
+// Projection twins are excluded or the marker would jump to month end.
+function todayIndexFor(drawn) {
+  const actuals = drawn.series.filter(s => !isReference(s) && !s.is_projection);
+  return actuals.length ? Math.max(...actuals.map(lastFilled)) : -1;
 }
 
 // Dashed marker at the last day with actual data, so the empty rest of the
@@ -456,6 +464,7 @@ function hasNegative(payload) {
 }
 
 function renderChart(payload) {
+  todayIdx = todayIndexFor(payload);
   const datasets = buildDatasets(payload);
   // Round-number gridlines only work when the axis starts at zero and climbs.
   // The vs-target view straddles zero, so let Chart.js scale that one.

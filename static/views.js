@@ -122,11 +122,46 @@
     return out;
   }
 
+  var ORIGIN_LABEL = '0';
+
+  /**
+   * Prepend a zero origin to a cumulative chart.
+   *
+   * Two reasons. On the 1st of the month every series holds exactly ONE point,
+   * and with pointRadius 0 a single point draws nothing at all — the chart is
+   * blank on day one. And a running total genuinely does start at zero, so
+   * showing the rise from zero is more honest than starting mid-air at day
+   * one's value.
+   *
+   * Applied at the END of applyView, after projections are computed, so the
+   * index arithmetic upstream (run rate, lastFilled) still sees real days only.
+   * Anything downstream that indexes into the drawn series must offset by
+   * originOffset — the today marker does.
+   *
+   * A series whose first point is null (a projection twin that hasn't started)
+   * gets null rather than 0, so it doesn't sprout a leg back to the origin.
+   *
+   * Assumes the series are cumulative, which every series in these dashboards
+   * is; it is only ever applied to the cumulative and projection views, never
+   * to per-day or variance, where a leading zero would be a meaningless bar.
+   */
+  function prependOrigin(panel) {
+    return Object.assign({}, panel, {
+      labels: [ORIGIN_LABEL].concat(panel.labels),
+      series: panel.series.map(function (s) {
+        var first = s.data.length ? s.data[0] : null;
+        return Object.assign({}, s, { data: [isNum(first) ? 0 : null].concat(s.data) });
+      }),
+      originOffset: 1,
+    });
+  }
+
   /**
    * Transform a payload (or a single multi-dashboard panel) for a named view.
    * Returns the same shape the renderer already consumes, plus:
    *   view          the view actually applied
    *   zeroBaseline  true when 0 is meaningful and should be drawn
+   *   originOffset  1 when a zero origin was prepended, else absent
    */
   function applyView(panel, viewName) {
     var view = VIEW_ORDER.indexOf(viewName) >= 0 ? viewName : 'cumulative';
@@ -189,14 +224,14 @@
           is_projection: true,
         });
       });
-      return Object.assign({}, panel, {
+      return prependOrigin(Object.assign({}, panel, {
         view: view,
         zeroBaseline: false,
         series: panel.series.concat(projected),
-      });
+      }));
     }
 
-    return Object.assign({}, panel, { view: 'cumulative', zeroBaseline: false });
+    return prependOrigin(Object.assign({}, panel, { view: 'cumulative', zeroBaseline: false }));
   }
 
   /**
@@ -273,6 +308,8 @@
 
   var API = {
     STATUS: STATUS,
+    ORIGIN_LABEL: ORIGIN_LABEL,
+    prependOrigin: prependOrigin,
     readMode: readMode,
     readView: readView,
     VIEW_ORDER: VIEW_ORDER,

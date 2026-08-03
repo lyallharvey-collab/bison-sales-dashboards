@@ -469,8 +469,11 @@ function renderLineChartPanel(panel) {
   const canvas = document.getElementById('chart-' + panel.id);
   if (!canvas) return;
 
-  const actuals = panel.series.filter((s) => !isReference(s));
-  const idx = actuals.length ? Math.max(...actuals.map(lastFilled)) : panel.labels.length - 1;
+  // panel here is the view-transformed one, so this index is already in drawn
+  // coordinates (including any prepended zero origin). Projection twins are
+  // excluded or the marker would jump to the end of the period.
+  const actuals = panel.series.filter((s) => !isReference(s) && !s.is_projection);
+  const idx = actuals.length ? Math.max(...actuals.map(lastFilled)) : -1;
   panelState[panel.id] = { todayIdx: idx };
 
   const datasets = buildDatasetsFor(panel);
