@@ -122,7 +122,11 @@
     return out;
   }
 
-  var ORIGIN_LABEL = '0';
+  // Deliberately blank, not "0": the origin exists so the line has something to
+  // be drawn from, but it isn't a day and labelling it just adds a tick that
+  // needs explaining. Both templates' axis callbacks pass a non-date label
+  // straight through, so an empty string renders as nothing.
+  var ORIGIN_LABEL = '';
 
   /**
    * Prepend a zero origin to a cumulative chart.
