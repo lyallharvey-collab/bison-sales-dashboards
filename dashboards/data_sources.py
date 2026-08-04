@@ -93,6 +93,55 @@ def read_group_total(
     return float(groups[0].get(measure) or 0.0)
 
 
+def read_group_totals(
+    client: OdooClient,
+    model: str,
+    domain: list,
+    measures: list[str],
+) -> dict[str, float]:
+    """SEVERAL server-side sums in ONE call, no groupby.
+
+    Deliberately not a loop over read_group_total: the JS twin is charged CPU
+    per response parsed, so N measures off one model with one domain must be
+    one call there — and the two implementations have to match.
+    """
+    groups = client.read_group(model, domain, measures, [], lazy=False)
+    first = groups[0] if groups else {}
+    return {m: float(first.get(m) or 0.0) for m in measures}
+
+
+def read_group_by_team(
+    client: OdooClient,
+    model: str,
+    domain: list,
+    date_field: str,
+    measure: str,
+    day_from: date,
+    day_to: date,
+) -> dict[int, float]:
+    """Sum `measure` per sales team (`team_id`), for date_field in
+    [day_from, day_to] inclusive.
+
+    Records with no team land under key 0 rather than being dropped — a
+    division scoreboard whose parts don't add up to the whole is worse than one
+    that shows an unattributed remainder.
+    """
+    full_domain = [
+        *domain,
+        (date_field, ">=", day_from.isoformat()),
+        (date_field, "<=", day_to.isoformat()),
+    ]
+    groups = client.read_group(model, full_domain, [measure], ["team_id"], lazy=False)
+
+    out: dict[int, float] = {}
+    for g in groups:
+        team = g.get("team_id")
+        # read_group returns a many2one as [id, display_name], or False when unset.
+        team_id = team[0] if isinstance(team, (list, tuple)) and team else 0
+        out[team_id] = out.get(team_id, 0.0) + float(g.get(measure) or 0.0)
+    return out
+
+
 def search_count(client: OdooClient, model: str, domain: list) -> int:
     """A single server-side count — for KPI tiles."""
     return client.execute(model, "search_count", domain or [])

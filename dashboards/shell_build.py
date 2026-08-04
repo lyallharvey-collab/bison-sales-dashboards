@@ -22,6 +22,7 @@ from datetime import date, datetime, timezone
 import pandas as pd
 
 from .config_schema import DashboardConfig
+from .division_sources import MEASURES, PERIOD_LABELS, meter_bounds
 from .multi_config_schema import MultiDashboardConfig, PanelConfig
 
 
@@ -82,6 +83,26 @@ def _shell_panel(p: PanelConfig, page_theme: dict, today: date) -> dict:
 
     if p.type == "kpi":
         return {**base, "value": None, "caption": p.caption or p.title}
+
+    if p.type == "meter_group":
+        # The window and the measure are config/calendar facts, not Odoo data,
+        # so the header can state what it's about before the first fetch lands —
+        # same reasoning as emitting the axis labels above. The tubes themselves
+        # are built in JS from the payload, like table rows.
+        day_from, day_to = meter_bounds(p.period, today)
+        return {
+            **base,
+            "unit": p.unit,
+            "currency_symbol": p.currency_symbol,
+            "measure": p.measure,
+            "measure_label": MEASURES[p.measure]["label"],
+            "period": p.period,
+            "period_label": PERIOD_LABELS[p.period],
+            "color": MEASURES[p.measure]["color"],
+            "period_from": day_from.isoformat(),
+            "period_to": day_to.isoformat(),
+            "meters": [],
+        }
 
     if p.type == "table":
         return {

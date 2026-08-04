@@ -39,7 +39,7 @@ class TableColumn:
 @dataclass
 class PanelConfig:
     id: str
-    type: str  # line_chart | kpi | table
+    type: str  # line_chart | kpi | meter_group | table
     title: str = ""
     theme: dict = field(default_factory=dict)
     # Layout: which column this panel stacks in, and its relative height
@@ -56,6 +56,10 @@ class PanelConfig:
     # kpi
     source: str | None = None
     caption: str | None = None
+    # meter_group — a meter is one ratio against a limit, so it has no series,
+    # no labels and no axis; just the window it covers and which actual to use.
+    period: str = "day"  # day | month
+    measure: str = "orders"  # orders | invoiced
     # table
     columns: list[TableColumn] = field(default_factory=list)
 
@@ -94,6 +98,8 @@ def load_multi_config(path: str | Path) -> MultiDashboardConfig:
             series=series,
             source=p.get("source"),
             caption=p.get("caption"),
+            period=p.get("period", "day"),
+            measure=p.get("measure", "orders"),
             columns=columns,
         ))
     return MultiDashboardConfig(

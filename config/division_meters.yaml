@@ -1,0 +1,32 @@
+# The per-division WIG scoreboard Bison ran in Excel until 2023 — Machinery /
+# Consumables / SAS / TOTAL, each showing actual against target as a vertical
+# "thermometer" meter.
+#
+# Its own page rather than a panel on sales_dashboard, so it can go into a
+# rotation of screens later.
+#
+# MIRROR ANY CHANGE HERE INTO lib/configs.js — this YAML drives the HTML shell,
+# lib/configs.js drives the live data, and nothing keeps them in sync.
+name: division_meters
+title: "Divisions — Today"
+refresh_seconds: 120
+
+panels:
+  - id: division_meters
+    type: meter_group
+    title: "Orders vs Daily Target"
+    col: left
+    flex: 1
+    unit: currency
+    currency_symbol: "£"
+    # day   = today vs today's daily target (a weekend rolls back to include
+    #         Friday, since x_daily_sales_targets has no weekend rows)
+    # month = month-to-date vs the month-to-date target
+    period: day
+    # orders   = confirmed + proforma sale orders + subscription invoicing,
+    #            split by team — the same measure as the Orders line
+    # invoiced = bison_core.account_move_gp_report, split by team
+    measure: orders
+    theme:
+      background: "#ffffff"
+      font_color: "#111111"

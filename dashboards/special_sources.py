@@ -22,10 +22,13 @@ import pandas as pd
 from .data_sources import read_group_daily, read_group_monthly, read_group_total
 from .odoo_client import OdooClient
 
+# Both public because division_sources.py builds the SAME "Orders" measure
+# split by team, and the two definitions drifting apart would be invisible on
+# screen.
 PROFORMA_STAGE_ID = 2  # x_daily_sales_targets / sale.order "Machinery Stage" = PROFORMA
 
 
-def _subscription_order_names(client: OdooClient) -> list[str]:
+def subscription_order_names(client: OdooClient) -> list[str]:
     sub_orders = client.search_read(
         "sale.order", [["is_subscription", "=", True]], fields=["name"], limit=10000
     )
@@ -33,7 +36,7 @@ def _subscription_order_names(client: OdooClient) -> list[str]:
 
 
 def _subscription_invoice_total(client: OdooClient, month_start: date, month_end: date) -> float:
-    names = _subscription_order_names(client)
+    names = subscription_order_names(client)
     if not names:
         return 0.0
     return read_group_total(
@@ -98,7 +101,7 @@ def orders_ytd_monthly_component(
     )
     combined = confirmed.add(proforma, fill_value=0.0)
 
-    names = _subscription_order_names(client)
+    names = subscription_order_names(client)
     if names:
         sub_monthly = read_group_monthly(
             client,

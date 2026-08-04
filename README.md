@@ -101,9 +101,10 @@ design and it is not an oversight.
 sales-dashboards/
   dashboards/
     odoo_client.py       OdooClient (XML-RPC — fine here, no CPU limit)
-    data_sources.py      generic read_group-by-day/-month helpers
+    data_sources.py      generic read_group-by-day/-month/-team helpers
     special_sources.py   composite sources (the Orders line, see below)
     crm_sources.py       the KPI count and the pipeline table
+    division_sources.py  per-division actual-vs-target scalars (the meters)
     config_schema.py     YAML -> DashboardConfig/SeriesConfig
     build.py             config -> data.json payload (cumulative sums, pandas)
     shell_build.py       config -> data-less payload for the deployed HTML
@@ -114,6 +115,7 @@ sales-dashboards/
   config/
     sales_graph.yaml      single-chart dashboard
     sales_dashboard.yaml  multi-panel dashboard
+    division_meters.yaml  the per-division thermometer board
   scripts/
     generate.py           CLI entrypoint (--shell for the no-Odoo render)
   functions/              Cloudflare Pages Functions. THE only thing that
@@ -124,6 +126,7 @@ sales-dashboards/
                           implementation of dashboards/*.py — see Architecture)
     jsonrpc.js             JSON-RPC codec (replaced a hand-rolled XML parser;
                            see the CPU table above for why)
+    divisionSources.js     the division mapping + meter scalars
     index.js               buildDashboardPayload(env, name)
     *.test.mjs             unit tests — `npm test`, no network or creds needed
     *.livetest.mjs         live-Odoo tests + the JS-vs-Python parity check —
@@ -244,7 +247,7 @@ table, in a 2-column grid). This is a **separate config shape**, detected
 automatically by the presence of a top-level `panels:` key — `generate.py`
 picks the right builder/template on its own, no flag needed.
 
-Each panel has a `type` (`line_chart` | `kpi` | `table`), a `col`
+Each panel has a `type` (`line_chart` | `kpi` | `meter_group` | `table`), a `col`
 (`left`/`right`) and `flex` (relative height weight within that column —
 e.g. a short KPI tile at `flex: 3` above a taller table at `flex: 6`), plus
 its own `theme:` (panels can have wildly different colours, like the blue KPI
@@ -271,6 +274,66 @@ The zoom control on this template is intentionally independent from the
 single-chart dashboard's (separate `localStorage` key) — they're different
 pages, plausibly on different physical screens, and shouldn't fight over one
 saved scale preference.
+
+A column with no panels in it is not emitted at all — otherwise its `flex-grow`
+would reserve half the screen for nothing, which is what a single-panel
+dashboard like `division_meters` is.
+
+## The division meters (`type: meter_group`)
+
+`config/division_meters.yaml` brings back the per-division WIG scoreboard Bison
+ran in Excel until 2023: **Machinery / Consumables / SAS / TOTAL**, each as a
+vertical thermometer showing actual against target.
+
+The point is the disaggregation, not the chart. The 2023 sheet's overall "72% of
+target" was Machinery 72%, Consumables 7%, SAS 231% — three completely different
+situations averaging into one unremarkable number, which is exactly what the
+company-total panels still hide. On the day this was built it read 17% overall =
+Machinery 0%, Consumables 88%, SAS 15%.
+
+**It is a meter, not a chart, and deliberately not Chart.js.** One ratio against
+a limit is a `div` track with a percentage-height fill: Chart.js has no gauge
+type and faking one with a stacked bar fights the tool, while CSS gives
+GPU-accelerated transitions for free and honours `prefers-reduced-motion` in one
+media query. Chart.js animation is globally disabled here for kiosk stability, so
+a CSS meter sidesteps that too.
+
+Two config knobs, both live in `config/division_meters.yaml` **and**
+`lib/configs.js`:
+
+| Key | Values | Meaning |
+|---|---|---|
+| `period` | `day` (current) / `month` | today vs today's daily target, or month-to-date vs the **month-to-date** target |
+| `measure` | `orders` (current) / `invoiced` | which actual to meter |
+
+Things that are load-bearing rather than cosmetic:
+
+- **All four tubes share one 0–100% scale.** Over target, the *fill* caps at the
+  top and the overflow is signalled by a green cap band plus a `+131% over
+  target` badge. Giving each tube its own max would make them non-comparable,
+  which defeats the point of standing them side by side. The true percentage is
+  *always* rendered as text, so no figure is ever gated by the visual.
+- **A weekend rolls back to Friday.** `x_daily_sales_targets` has no weekend rows
+  at all, so a Saturday would otherwise divide by a zero target while Saturday's
+  orders sat invisible. The window becomes Friday–today, which is the same fold
+  the charts already apply.
+- **`period: month` compares to-date against to-date**, never against the
+  full-month target. Settled precedent here — see the `summarise()` note in
+  `static/views.js`.
+- **Animation is one-shot only, and never load-bearing.** The fill height is set
+  synchronously and the rise-from-empty is a CSS keyframe applied only when
+  `document.visibilityState === 'visible'`. An earlier version primed a
+  transition from a `requestAnimationFrame` callback, which does not fire in a
+  hidden tab — a page opened in a background tab (what a rotation of dashboards
+  does) painted empty tubes and stayed that way. A paused animation also *holds*
+  the fill at its `from` keyframe of zero, hence the visibility gate. Values are
+  only re-written when they actually changed, so the 120s refetch doesn't make the
+  wall twitch on identical numbers.
+- **TOTAL sums the source, not the three rows.** A record on no team, or on a
+  fourth team someone adds in Odoo without mapping it, still reaches the company
+  figure. `npm run livetest` prints the gap if the parts stop adding up to the
+  whole. TOTAL's *target* is the company field, not the sum of the three, so this
+  page and the Sales Graph can't disagree about what the company target is.
 
 ## Keeping it running
 
@@ -303,12 +366,15 @@ push. Deploy by hand only when you want to skip CI.
 **Live now:**
 - **https://bison-dashboards.pages.dev/sales_graph/**
 - **https://bison-dashboards.pages.dev/sales_dashboard/**
+- **https://bison-dashboards.pages.dev/division_meters/**
 
-Both are gated by Cloudflare Access, including the `/data.json` endpoints —
+All are gated by Cloudflare Access, including the `/data.json` endpoints —
 confirmed by requesting them unauthenticated and getting a 302 to the Access
-login rather than a 200 with data. Re-check that after any change that adds a
-route. Whoever administers Access should confirm the policy is scoped to the
-right people; that policy was not configured from here.
+login rather than a 200 with data. The policy covers paths that don't exist yet
+too (`/division_meters/data.json` returned 302 before it was ever deployed), so a
+new route is gated on arrival rather than briefly open — but re-check anyway after
+any change that adds one. Whoever administers Access should confirm the policy is
+scoped to the right people; that policy was not configured from here.
 
 ### If the screens go stale
 
@@ -367,3 +433,37 @@ version; the config maps them as:
 | `bison_core_account_move_gp_report` | registered as model `bison_core.account_move_gp_report` (fields: `sales_target_date`, `aml_total_net`, `move_id`, `move_type`) |
 | `sale_subscription` (table of contract `code`s) | subscriptions are now `sale.order` records with `is_subscription = True`; matched to invoices via `account.move.invoice_origin` same as before |
 | `machinary_stage_id = 2` (Proforma) | confirmed live: stage id 2 = "PROFORMA" |
+
+## Notes on the Odoo v18 field mapping (division meters)
+
+Verified against live Odoo. There are exactly **three** `crm.team` records, so
+this is a closed 1:1 mapping and the three divisions are the whole business.
+
+| Division | `crm.team` id | Daily target field on `x_daily_sales_targets` |
+|---|---|---|
+| Machinery | **5** (`MACHINERY`) | `x_studio_machinery_daily_target` |
+| Consumables | **7** (`CONSUMABLES`) | `x_studio_consumables_daily_target` |
+| SAS (service) | **6** (`SAS`) | `x_studio_sas_daily_target` |
+
+Both actuals sources carry `team_id` (`sale.order`, and
+`bison_core.account_move_gp_report`), so per-division actuals are a `read_group`
+on `team_id` — no joins, no new models. `account.move` carries it too, which is
+how the subscription component gets attributed.
+
+**Ignore the other `x_studio_*_daily_target` columns** (ARB, BC, CC, GBH, PCD,
+RHB, SRH, Grange). They are per-salesperson, not divisions — and their labels
+disagree with their field names (`x_studio_cc_daily_target` is labelled "CJB
+Daily Target", `x_studio_gbh_daily_target` is "LMJ"), i.e. initials.
+
+Two things worth knowing about the data:
+
+- `x_daily_sales_targets` has **no weekend rows at all** — they're absent, not
+  zero. Hence the Friday rollback.
+- The division `orders` measure counts subscription invoicing on its real
+  `invoice_date`, whereas the company Orders line pins the whole month's lump to
+  the month's first day with activity (the original SQL joined one monthly total
+  onto one row). A single-day meter has no "first day of the month" to pin to.
+  The two therefore reconcile exactly whenever the month's subscription invoices
+  all fall inside the window — they did on the day this was built: divisions
+  month-to-date summed to £36,708.80 orders / £26,198.47 invoiced, matching the
+  Sales Graph's cumulative figures to the penny.

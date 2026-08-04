@@ -9,7 +9,15 @@
      dashboard, unit-tested in lib/views.test.mjs. -->
 <script src="/static/views.js"></script>
 <style>
-  :root { --page-bg: #eef0f3; --page-fg: #111111; --scale: 1; }
+  :root {
+    --page-bg: #eef0f3; --page-fg: #111111; --scale: 1;
+    /* Fixed status palette — reserved for good/warning/serious/critical and
+       never used for identity. Matches static/views.js's STATUS. */
+    --status-good: #0ca30c;
+    /* Target is purple on every chart in this project: colour follows the
+       entity, not the rank. */
+    --target-ink: #8e24aa;
+  }
   * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0; width: 100%; height: 100%;
@@ -89,6 +97,90 @@
   }
   .kpi-caption { font-size: calc(2vh * var(--scale)); opacity: 0.9; font-weight: 600; }
 
+  /* --- meter_group: one thermometer per division -------------------------
+     NOT a chart. A meter is one ratio against a limit, so it's a div track
+     with a percentage-height fill: Chart.js has no gauge type and faking one
+     with a stacked bar fights the tool, while CSS gives GPU-accelerated
+     transitions for free and honours prefers-reduced-motion trivially.
+     FUNCTIONAL, NOT DESIGNED — deliberately plain so it can be restyled
+     without touching any of the logic below. */
+  .panel-meter-group .panel-body { display: flex; flex-direction: column; }
+  .meter-caption {
+    flex: none; font-size: calc(1.6vh * var(--scale)); font-weight: 600;
+    opacity: 0.6; padding: 0 0 1.4vh;
+  }
+  .meter-group { flex: 1; min-height: 0; display: flex; align-items: stretch; gap: 1.8vw; }
+  .meter {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    align-items: center; gap: 0.7vh;
+  }
+  /* Solid hairline separator, and only ever this one: TOTAL is the whole, the
+     others are the parts. */
+  .meter.is-total { border-left: 1px solid rgba(0,0,0,0.14); padding-left: 1.8vw; }
+
+  /* Reserved even when empty, so the tubes all start at the same height and
+     don't shuffle down the moment one goes over target. */
+  .meter-badge {
+    flex: none; height: calc(2.4vh * var(--scale)); line-height: calc(2.4vh * var(--scale));
+    font-size: calc(1.5vh * var(--scale)); font-weight: 700; white-space: nowrap;
+    color: var(--status-good);
+  }
+  .meter-track {
+    flex: 1; min-height: 0; width: 100%; max-width: calc(11vw * var(--scale));
+    position: relative; display: flex; align-items: flex-end;
+    background: rgba(0,0,0,0.06); border-radius: 10px; overflow: hidden;
+    /* The top of the tube IS the target, so mark it in Target's colour —
+       purple, the same as the pace line on every chart. Solid hairline. */
+    border-top: 2px solid var(--target-ink);
+  }
+  .meter-fill {
+    width: 100%; height: 0; background: var(--meter-ink);
+    transition: height 750ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  /* The one-shot rise on first paint is a keyframe, NOT a transition primed from
+     a requestAnimationFrame callback. rAF does not fire in a hidden tab, so with
+     the callback approach a page opened in a background tab — exactly what a
+     rotation of dashboards does — painted empty tubes and stayed that way until
+     a figure happened to change. The height is now set synchronously and this
+     animates from zero to whatever that height already is, so the animation is
+     pure decoration and its absence can never be a wrong reading. */
+  @keyframes meter-rise { from { height: 0; } }
+  .meter-fill.rise { animation: meter-rise 750ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+  /* Over target: the fill is capped at the top of the tube (all four stay on
+     one 0-100% scale, or they stop being comparable — which is the whole point
+     of standing them side by side), and the overflow is signalled by this cap
+     band plus the badge above. Never by colour alone. */
+  .meter-cap { display: none; position: absolute; left: 0; right: 0; top: 0;
+    height: calc(1.4vh * var(--scale)); background: var(--status-good); }
+  .meter.is-over .meter-cap { display: block; }
+
+  .meter-label { flex: none; font-size: calc(2vh * var(--scale)); font-weight: 700; white-space: nowrap; }
+  .meter-value {
+    flex: none; font-size: calc(3.4vh * var(--scale)); font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  /* Always rendered as text, so the figure is never gated by whether the fill
+     is legible from across the room. */
+  .meter-pct {
+    flex: none; font-size: calc(1.5vh * var(--scale)); font-weight: 600;
+    opacity: 0.55; white-space: nowrap;
+  }
+
+  /* One-shot emphasis when a division CROSSES its target — a moment worth
+     noticing. Deliberately not a permanent animated state: this is a wall
+     display and a looping pulse is maddening within an hour. */
+  @keyframes meter-crossed {
+    from { box-shadow: 0 0 0 0 var(--status-good); }
+    to   { box-shadow: 0 0 0 calc(1.2vh * var(--scale)) rgba(12,163,12,0); }
+  }
+  .meter.just-crossed .meter-track { animation: meter-crossed 900ms ease-out 2; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .meter-fill { transition: none; }
+    .meter-fill.rise { animation: none; }
+    .meter.just-crossed .meter-track { animation: none; }
+  }
+
   .panel-table .panel-body { padding: 0; overflow: auto; }
   table.data-table { width: 100%; border-collapse: collapse; font-size: calc(1.8vh * var(--scale)); }
   table.data-table th, table.data-table td {
@@ -138,9 +230,14 @@
   <div class="viewbar" id="viewbar"></div>
 
   <div class="grid">
+    {# A column with no panels must not be emitted at all, or its flex-grow
+       reserves half the screen for nothing — which is what a single-panel
+       dashboard like division_meters is. #}
     {% for col in ['left', 'right'] %}
+    {% set col_panels = data.panels | selectattr('col', 'equalto', col) | list %}
+    {% if col_panels %}
     <div class="col col-{{ col }}">
-      {% for panel in data.panels if panel.col == col %}
+      {% for panel in col_panels %}
       <div class="panel panel-{{ panel.type.replace('_', '-') }}" data-panel-id="{{ panel.id }}"
            style="--panel-bg: {{ panel.theme.get('background', '#ffffff') }}; --panel-fg: {{ panel.theme.get('font_color', '#111111') }}; flex: {{ panel.flex }};">
         {% if panel.type != 'kpi' %}<div class="panel-header">{{ panel.title }}</div>{% endif %}
@@ -151,6 +248,12 @@
           {% elif panel.type == 'kpi' %}
             <div class="kpi-value" id="kpi-value-{{ panel.id }}"></div>
             <div class="kpi-caption" id="kpi-caption-{{ panel.id }}"></div>
+          {% elif panel.type == 'meter_group' %}
+            {# Container only; the tubes are built in JS from the payload, like
+               table rows, so the data-less shell doesn't need to know how many
+               divisions there are. #}
+            <div class="meter-caption" id="meter-caption-{{ panel.id }}"></div>
+            <div class="meter-group" id="meters-{{ panel.id }}"></div>
           {% elif panel.type == 'table' %}
             <table class="data-table" id="table-{{ panel.id }}">
               <thead><tr>
@@ -163,6 +266,7 @@
       </div>
       {% endfor %}
     </div>
+    {% endif %}
     {% endfor %}
   </div>
 
@@ -204,6 +308,12 @@ function renderViewbar() {
   const bar = document.getElementById('viewbar');
   if (!bar || !DV) return;
   if (MODE === 'kiosk') { bar.innerHTML = ''; return; }
+  // The views are all chart derivations (running total, per day, vs target,
+  // projection). A page with no chart on it has nothing to switch, so offering
+  // the buttons would just be four dead controls.
+  const hasChart = lastPayload
+    && lastPayload.panels.some((p) => p.type === 'line_chart');
+  if (!hasChart) { bar.innerHTML = ''; return; }
   bar.innerHTML = '';
   DV.VIEW_ORDER.forEach((v) => {
     const b = document.createElement('button');
@@ -609,6 +719,122 @@ function renderKpiPanel(panel) {
   if (capEl) capEl.textContent = panel.caption;
 }
 
+// --- meter_group ----------------------------------------------------------
+// Previous percentage per tube, so a refetch that changes nothing animates
+// nothing. The page refetches every 120s and re-animating identical numbers
+// would make the wall twitch continuously.
+const meterPct = {};
+
+function fmtMeterPeriod(panel) {
+  if (!panel.period_to) return '';
+  const to = new Date(panel.period_to + 'T00:00:00');
+  if (panel.period_from === panel.period_to) {
+    return to.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  }
+  const from = new Date(panel.period_from + 'T00:00:00');
+  const short = { day: 'numeric', month: 'short' };
+  return from.toLocaleDateString([], short) + ' – ' + to.toLocaleDateString([], short);
+}
+
+// States the measure, the window and the scale in words — the panel title alone
+// can't carry all three, and a tube with no stated limit is unreadable.
+function meterCaption(panel) {
+  return [
+    (panel.measure_label || '') + ' vs ' + (panel.period_label || 'target'),
+    fmtMeterPeriod(panel),
+    'full tube = target',
+  ].filter(Boolean).join('  ·  ');
+}
+
+function buildMeterEl(m) {
+  const el = document.createElement('div');
+  el.className = 'meter' + (m.is_total ? ' is-total' : '');
+  el.dataset.key = m.key;
+  el.innerHTML =
+    '<div class="meter-badge"></div>' +
+    '<div class="meter-track"><div class="meter-cap"></div><div class="meter-fill"></div></div>' +
+    '<div class="meter-label"></div>' +
+    '<div class="meter-value"></div>' +
+    '<div class="meter-pct"></div>';
+  return el;
+}
+
+function renderMeterGroupPanel(panel) {
+  const host = document.getElementById('meters-' + panel.id);
+  if (!host) return;
+  const caption = document.getElementById('meter-caption-' + panel.id);
+  if (caption) caption.textContent = meterCaption(panel);
+
+  const meters = panel.meters || [];
+  if (!meters.length) return;   // data-less shell, before the first fetch
+  const prev = meterPct[panel.id] || (meterPct[panel.id] = {});
+  const seen = new Set();
+
+  meters.forEach((m) => {
+    seen.add(m.key);
+    let el = host.querySelector('.meter[data-key="' + m.key + '"]');
+    const isNew = !el;
+    if (isNew) {
+      el = buildMeterEl(m);
+      el.style.setProperty('--meter-ink', panel.color || '#1e88e5');
+      host.appendChild(el);
+    }
+
+    const pct = (m.pct === null || m.pct === undefined) ? null : m.pct;
+    const over = pct !== null && pct > 1;
+    el.classList.toggle('is-over', over);
+
+    el.querySelector('.meter-label').textContent = m.label;
+    el.querySelector('.meter-value').textContent =
+      fmtValueFor(panel.unit, panel.currency_symbol, m.actual);
+    el.querySelector('.meter-pct').textContent = pct === null
+      ? 'no target set'
+      : Math.round(pct * 100) + '% of ' + fmtCompactFor(panel.unit, panel.currency_symbol, m.target);
+    // The status colour never travels alone: the cap band is always accompanied
+    // by this labelled badge.
+    el.querySelector('.meter-badge').textContent = over
+      ? '+' + Math.round((pct - 1) * 100) + '% over target'
+      : '';
+
+    // Capped at 100% so all the tubes share one scale and stay comparable.
+    // Giving each its own max would make them non-comparable, which defeats the
+    // point of standing them side by side.
+    const height = pct === null ? 0 : Math.max(0, Math.min(pct, 1)) * 100;
+    const fill = el.querySelector('.meter-fill');
+    const before = prev[m.key];
+
+    if (isNew) {
+      // Height set synchronously — never from a requestAnimationFrame callback,
+      // which does not fire in a hidden tab and left the tubes empty when the
+      // page was opened in the background (what a rotation of dashboards does).
+      fill.style.height = height + '%';
+      // The rise-from-empty is decoration, and a paused animation would HOLD the
+      // fill at its `from` keyframe of zero — so only ask for it when there is
+      // someone there to see it. Hidden: correct height, no animation.
+      if (document.visibilityState === 'visible') {
+        fill.classList.add('rise');
+        fill.addEventListener('animationend', () => fill.classList.remove('rise'), { once: true });
+      }
+    } else if (before === undefined || Math.abs(before - (pct === null ? 0 : pct)) > 0.0005) {
+      fill.style.height = height + '%';
+      // Crossing the target is a moment; mark it once and let it finish.
+      if (before !== undefined && before <= 1 && pct !== null && pct > 1) {
+        el.classList.remove('just-crossed');
+        void el.offsetWidth;   // restart the animation rather than ignore it
+        el.classList.add('just-crossed');
+        setTimeout(() => el.classList.remove('just-crossed'), 2000);
+      }
+    }
+    prev[m.key] = pct === null ? 0 : pct;
+  });
+
+  // Divisions are a fixed set, but don't leave a stale tube on screen if that
+  // ever changes mid-session.
+  host.querySelectorAll('.meter').forEach((el) => {
+    if (!seen.has(el.dataset.key)) el.remove();
+  });
+}
+
 function renderTablePanel(panel) {
   const table = document.getElementById('table-' + panel.id);
   if (!table) return;
@@ -636,6 +862,7 @@ function applyPayload(payload) {
       renderPanelStats(panel);
       renderLineChartPanel(DV ? DV.applyView(panel, currentView) : panel);
     } else if (panel.type === 'kpi') renderKpiPanel(panel);
+    else if (panel.type === 'meter_group') renderMeterGroupPanel(panel);
     else if (panel.type === 'table') renderTablePanel(panel);
   });
   renderViewbar();

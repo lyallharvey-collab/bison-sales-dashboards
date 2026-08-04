@@ -15,6 +15,7 @@ from . import crm_sources
 from .build import build_dashboard as _build_daily_chart
 from .config_schema import DashboardConfig, SeriesConfig
 from .data_sources import read_group_monthly
+from .division_sources import division_meters
 from .multi_config_schema import MultiDashboardConfig, PanelConfig, PanelSeriesConfig
 from .odoo_client import OdooClient, get_client
 from .special_sources import COMPOSITE_SOURCES
@@ -96,6 +97,25 @@ def _build_kpi(client: OdooClient, panel: PanelConfig, today: date) -> dict:
     return {"title": panel.title, "value": value, "caption": panel.caption or panel.title}
 
 
+def _build_meter_group(client: OdooClient, panel: PanelConfig, today: date) -> dict:
+    """A meter is one ratio against a limit, not a chart — so it carries
+    scalars, no labels/series. Rendered as CSS tubes, not Chart.js."""
+    m = division_meters(client, today, period=panel.period, measure=panel.measure)
+    return {
+        "title": panel.title,
+        "unit": panel.unit,
+        "currency_symbol": panel.currency_symbol,
+        "measure": m["measure"],
+        "measure_label": m["measure_label"],
+        "period": m["period"],
+        "period_label": m["period_label"],
+        "color": m["color"],
+        "period_from": m["period_from"],
+        "period_to": m["period_to"],
+        "meters": m["meters"],
+    }
+
+
 def _build_table(client: OdooClient, panel: PanelConfig) -> dict:
     if panel.source == "crm_pipeline_table":
         rows = crm_sources.pipeline_table(client)
@@ -123,6 +143,8 @@ def build_multi_dashboard(cfg: MultiDashboardConfig, today: date | None = None) 
             )
         elif p.type == "kpi":
             body = _build_kpi(client, p, today)
+        elif p.type == "meter_group":
+            body = _build_meter_group(client, p, today)
         elif p.type == "table":
             body = _build_table(client, p)
         else:

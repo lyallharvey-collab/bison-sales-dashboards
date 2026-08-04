@@ -1,5 +1,11 @@
 # Implementation plan — per-division "thermometer" panel
 
+> **STATUS: IMPLEMENTED (2026-08-04).** Kept for the reasoning, not as a to-do
+> list. The living documentation is the "division meters" section of `README.md`;
+> if the two ever disagree, the README wins. Lyall's answers to §8 are recorded
+> there. The one step still outstanding is the deploy itself (`git push`) and a
+> human confirming the live page.
+
 Hand this to a fresh Claude Code session in the `sales-dashboards` project. It is
 written to be self-contained: you should not need the conversation it came from.
 
@@ -306,14 +312,44 @@ it before writing any chart code.
 
 ---
 
-## 8. Open questions for Lyall
+## 8. Open questions for Lyall — ANSWERED
 
-1. **Orders or Invoiced** as "Actual"? (Recommend Orders, configurable.)
-2. **Month-to-date, or daily?** The 2023 sheet's £44,138.77 total sits close to
-   today's £42,400 company *daily* target, which hints it was daily — but that is
-   a hunch from one number. Recommend month-to-date for consistency with the rest
-   of the dashboard.
-3. **Should the TOTAL tube be shown**, or is the company figure already covered
-   by the existing panels? (2023 sheet had four tubes including TOTAL.)
-4. **Where on the dashboard** — replacing a panel, a new column, or its own page
-   at `/divisions/`?
+1. **Orders or Invoiced** as "Actual"? → **Orders**, and it is configurable
+   (`measure: orders | invoiced`). Both paths are implemented and exercised
+   against live Odoo.
+2. **Month-to-date, or daily?** → **Daily**, as the starting point. `period: day
+   | month` is a config knob, so switching later is a one-line change in two
+   files, not a rewrite. Note the hunch in the original question turned out to be
+   supported: the 2023 sheet's £44,138.77 does sit right alongside the £42,400
+   company *daily* target.
+   - Daily brought one thing the plan hadn't anticipated:
+     `x_daily_sales_targets` has **no weekend rows at all**, so a Saturday would
+     divide by a zero target. The window rolls back to Friday, matching the fold
+     the charts already apply.
+   - The §3 "targets must be TO-DATE" rule still holds and still matters — it is
+     what `period: month` does. For `period: day` it degenerates to "today's
+     target", which is the same principle at one day's granularity.
+3. **Should the TOTAL tube be shown?** → **Yes**, four tubes, as in the 2023
+   sheet. Its target comes from `x_studio_company_daily_target` rather than the
+   sum of the three, so this page and the Sales Graph cannot disagree about what
+   the company target is.
+4. **Where on the dashboard?** → **Its own page**, `/division_meters/`, with a
+   rotation of several dashboards in mind. That is why the render path had to stop
+   depending on `requestAnimationFrame` — see the animation note in `README.md`:
+   rAF never fires in a hidden tab, so a rotation loading pages in the background
+   painted empty tubes.
+
+### What §5's verification actually produced
+
+- `npm test` — passes, plus a new `lib/meters.test.mjs` covering the mapping, the
+  weekend rollback, the over-100% case, the unattributed remainder and zero
+  targets.
+- `npm run livetest` — **OVERALL: MATCH**.
+- `npm run cpucheck` — `division_meters` is **0.164 ms of the 10 ms budget
+  (1.6%)** on 6 Odoo calls, the cheapest of the three dashboards.
+- **Reconciliation, the check that mattered:** divisions month-to-date summed to
+  £36,708.80 (orders) and £26,198.47 (invoiced), matching the Sales Graph's
+  existing cumulative figures **to the penny** — so the domains are right.
+- Exercised through `wrangler pages dev`, i.e. the real Pages Function.
+- Rendering verified by DOM inspection, not screenshots — gotcha #9 held: the
+  screenshot tool still fails with "the Browser pane is not displayed".
