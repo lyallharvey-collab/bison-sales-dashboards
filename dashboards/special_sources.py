@@ -35,22 +35,67 @@ def subscription_order_names(client: OdooClient) -> list[str]:
     return [o["name"] for o in sub_orders]
 
 
+def _subscription_invoice_domain(names: list[str], start: date, end: date) -> list:
+    return [
+        ("invoice_origin", "in", names),
+        ("move_type", "in", ["out_invoice", "out_refund"]),
+        ("state", "=", "posted"),
+        ("invoice_date", ">=", start.isoformat()),
+        ("invoice_date", "<=", end.isoformat()),
+    ]
+
+
+def _net_invoices_minus_refunds(groups: list[dict]) -> float:
+    """Credit notes carry a POSITIVE amount_untaxed in Odoo, so they must be
+    subtracted, not summed. The original Dashboard Ninja SQL did
+    `case when move_type = 'out_invoice' then amount_untaxed else 0-amount_untaxed end`;
+    summing both inflated Orders by twice any refund."""
+    net = 0.0
+    for g in groups:
+        move_type = g.get("move_type")
+        if isinstance(move_type, (list, tuple)):
+            move_type = move_type[0]
+        amount = g.get("amount_untaxed") or 0.0
+        net += -amount if move_type == "out_refund" else amount
+    return net
+
+
 def _subscription_invoice_total(client: OdooClient, month_start: date, month_end: date) -> float:
     names = subscription_order_names(client)
     if not names:
         return 0.0
-    return read_group_total(
-        client,
+    groups = client.read_group(
         "account.move",
-        [
-            ("invoice_origin", "in", names),
-            ("move_type", "in", ["out_invoice", "out_refund"]),
-            ("state", "=", "posted"),
-            ("invoice_date", ">=", month_start.isoformat()),
-            ("invoice_date", "<=", month_end.isoformat()),
-        ],
-        "amount_untaxed",
+        _subscription_invoice_domain(names, month_start, month_end),
+        ["amount_untaxed"], ["move_type"], lazy=False,
     )
+    return _net_invoices_minus_refunds(groups)
+
+
+def _subscription_net_by_month(
+    client: OdooClient, names: list[str], start: date, end: date
+) -> "pd.Series":
+    """Per-month net subscription invoicing. One call, grouped by month AND
+    move_type, then netted per month."""
+    groups = client.read_group(
+        "account.move",
+        _subscription_invoice_domain(names, start, end),
+        ["amount_untaxed"], ["invoice_date:month", "move_type"], lazy=False,
+    )
+    per_month: dict = {}
+    for g in groups:
+        rng = (g.get("__range") or {}).get("invoice_date:month")
+        if not rng or not rng.get("from"):
+            continue
+        key = pd.Timestamp(rng["from"][:10])
+        move_type = g.get("move_type")
+        if isinstance(move_type, (list, tuple)):
+            move_type = move_type[0]
+        amount = g.get("amount_untaxed") or 0.0
+        per_month[key] = per_month.get(key, 0.0) + (-amount if move_type == "out_refund" else amount)
+    if not per_month:
+        return pd.Series(dtype="float64")
+    return pd.Series(per_month).sort_index()
 
 
 def sales_orders_component(
@@ -103,16 +148,8 @@ def orders_ytd_monthly_component(
 
     names = subscription_order_names(client)
     if names:
-        sub_monthly = read_group_monthly(
-            client,
-            "account.move",
-            [
-                ("invoice_origin", "in", names),
-                ("move_type", "in", ["out_invoice", "out_refund"]),
-                ("state", "=", "posted"),
-            ],
-            "invoice_date", "amount_untaxed", year_start, month_to,
-        )
+        # Netted per month, not summed — see _net_invoices_minus_refunds.
+        sub_monthly = _subscription_net_by_month(client, names, year_start, month_to)
         combined = combined.add(sub_monthly, fill_value=0.0)
 
     return combined.sort_index()

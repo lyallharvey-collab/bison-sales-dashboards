@@ -20,18 +20,31 @@ def _month_bounds(today: date) -> tuple[date, date]:
     return month_start, month_end
 
 
-def _fold_weekends_into_prior_business_day(daily: pd.Series) -> pd.Series:
+def _fold_weekends_into_prior_business_day(
+    daily: pd.Series, floor: date | None = None
+) -> pd.Series:
     """The chart's x-axis is business days only. Weekend activity has no day
     of its own to land on, so fold it into the same week's Friday — backward,
     not forward into next Monday, so it shows up immediately (as part of
     Friday's running total) rather than sitting invisible until Monday
-    arrives, including when "today" is itself a Saturday/Sunday."""
+    arrives, including when "today" is itself a Saturday/Sunday.
+
+    EXCEPT at the start of the month. A weekend on the 1st/2nd rolls back into
+    the PREVIOUS month, which isn't on this chart's axis, so the value used to
+    vanish silently. August 2026 is a live example: it opens on a Saturday and
+    the service-contract invoices are dated the 1st. There, roll FORWARD to the
+    first business day instead — losing the money is never the right answer.
+    """
     if daily.empty:
         return daily
+    floor_ts = pd.Timestamp(floor) if floor is not None else None
     out: dict = {}
     for ts, val in daily.items():
         if ts.weekday() >= 5:  # Saturday=5, Sunday=6
-            ts = pd.offsets.BDay().rollback(ts)
+            rolled = pd.offsets.BDay().rollback(ts)
+            if floor_ts is not None and rolled < floor_ts:
+                rolled = pd.offsets.BDay().rollforward(ts)
+            ts = rolled
         out[ts] = out.get(ts, 0.0) + val
     return pd.Series(out).sort_index()
 
@@ -48,7 +61,8 @@ def _daily_for_series(
         daily = daily[daily.index <= pd.Timestamp(day_to)]
     else:
         raise ValueError(f"series '{s.key}': unknown source '{s.source}'")
-    return _fold_weekends_into_prior_business_day(daily)
+    # month_start lets the fold detect a weekend that would roll out of the month.
+    return _fold_weekends_into_prior_business_day(daily, month_start)
 
 
 def build_dashboard(cfg: DashboardConfig, today: date | None = None) -> dict:
