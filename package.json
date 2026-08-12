@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node lib/jsonrpc.test.mjs && node lib/dates.test.mjs && node lib/views.test.mjs && node lib/meters.test.mjs && node lib/folding.test.mjs && node lib/refunds.test.mjs",
-    "livetest": "node lib/odooClient.livetest.mjs && node lib/compare.livetest.mjs",
+    "livetest": "node lib/odooClient.livetest.mjs && node lib/compare.livetest.mjs && node lib/sqlparity.livetest.mjs",
+    "sqlcheck": "node lib/sqlparity.livetest.mjs",
     "cpucheck": "node lib/cpubudget.probe.mjs",
     "deploy": "wrangler pages deploy output --project-name bison-dashboards --commit-dirty=true",
     "snapshot": "node lib/snapshot.mjs",

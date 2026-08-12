@@ -179,9 +179,40 @@ that's expected, and it's why production must be verified separately (see
 Tests:
 
 ```bash
-npm test        # unit tests: JSON-RPC codec + date/weekend logic. No creds.
-npm run livetest # hits live Odoo, then diffs JS output against Python output
+npm test         # unit tests: JSON-RPC codec, date/weekend logic, folding, refunds. No creds.
+npm run livetest # live Odoo: JS-vs-Python parity, THEN dashboard-vs-original-SQL
+npm run sqlcheck # just the dashboard-vs-SQL diff
 ```
+
+### Why there are two different live checks
+
+`compare.livetest.mjs` proves the JS and the Python agree **with each other**.
+That is worth having, but it is not a correctness check — and twice now they have
+agreed perfectly while **both being wrong**. The refund sign and the month-start
+weekend fold were each found by a human exporting the Ninja graph to xlsx and
+diffing by hand; the parity suite was green through both.
+
+`sqlparity.livetest.mjs` is the fix for that blind spot. It rebuilds all four
+series from raw `read_group` calls that transcribe the original Dashboard Ninja
+SQL, importing **none** of the aggregation logic, and diffs the result against
+the live dashboard. Two independent readings of the business rules agreeing is a
+real check; one implementation agreeing with its own twin is not.
+
+It also encodes the two places the dashboard **deliberately** differs from the
+SQL, as assertions rather than silence:
+
+1. **Weekends.** The SQL joins activity onto `x_daily_sales_targets` rows, which
+   don't exist at weekends, so weekend orders vanish. The dashboard folds them
+   onto a business day. The check asserts the gap between the two equals the
+   folded weekend money *exactly and nothing else* — a stronger claim than "the
+   totals match".
+2. **Service-contract population.** See below. The check reports the difference
+   and fails only if the *dashboard* is the one missing money.
+
+One practical note: this runs against a live, in-use system. An order confirmed
+mid-run shifts today's column — observed once, a £583.30 order landing at
+10:11:42 — so the check reads the SQL side either side of the dashboard build and
+labels a moving figure as live movement rather than a mismatch.
 
 ## Adding a new dashboard
 
@@ -431,8 +462,58 @@ version; the config maps them as:
 |---|---|
 | `x_daily_sales_targets` (`x_studio_date`, `x_studio_company_daily_target`, `x_studio_company_daily_breakeven`) | same model/fields, still present |
 | `bison_core_account_move_gp_report` | registered as model `bison_core.account_move_gp_report` (fields: `sales_target_date`, `aml_total_net`, `move_id`, `move_type`) |
-| `sale_subscription` (table of contract `code`s) | subscriptions are now `sale.order` records with `is_subscription = True`; matched to invoices via `account.move.invoice_origin` same as before |
+| `sale_subscription` (table of contract `code`s) | **legacy table, do not use** — see below. Subscriptions are now `sale.order` records with `is_subscription = True`; matched to invoices via `account.move.invoice_origin` |
 | `machinary_stage_id = 2` (Proforma) | confirmed live: stage id 2 = "PROFORMA" |
+
+### Which service contracts count — RESOLVED (Aug 2026)
+
+This was the one open question left by the Ninja xlsx comparison: the dashboard
+reported £8,581.93 more service-contract invoicing than Ninja did, and settling it
+needed someone to inspect a table the ORM cannot reach. A corrected SQL query
+settled it, and it **confirms the dashboard**.
+
+The original SQL selected contract invoices with:
+
+```sql
+invoice_origin in (select code from sale_subscription)
+```
+
+`sale_subscription` is a **pre-migration legacy table**. It holds only the old
+`SUB###`-coded contracts — 47 of them in August 2026, worth £15,506.25. The
+contracts created since the migration have ordinary numeric `sale.order` names and
+can never appear in it, so that query under-counted by every newer contract and
+drifted further with each one added. Measured in August 2026: 47 invoices /
+£15,506.25 against the correct 78 invoices / £28,952.80.
+
+(Note the SUB codes are not lost — `SUB061`, `SUB037` etc. are live `sale.order`
+records with `is_subscription = True`, so the dashboard's criterion catches those
+47 as well as the 31 newer ones. The legacy table is a stale copy, not a
+separate population.)
+
+The corrected SQL finds them relationally instead, via a line-level join
+`account_move_line → sale_order_line_invoice_rel → sale_order_line → sale_order`
+where `is_subscription OR subscription_id IS NOT NULL`. In August 2026 that
+selects **exactly the same 78 invoices** as the dashboard's `invoice_origin`
+match, and all four series agree to the penny on every day of the month.
+
+**Why the dashboard still matches on `invoice_origin` rather than switching to the
+relational join:** over 2026 the join misses **20 invoices, net £5,800.64**. They
+carry a subscription order in `invoice_origin` but have no row in
+`sale_order_line_invoice_rel` at all — e.g. invoice `187375`, origin `188656`,
+whose order *is* `is_subscription`, and whose single line has `sale_line_ids = []`.
+Adopting the join verbatim would quietly drop that money from the Year-To-Date
+chart. None of the 20 fall in August, which is why the two agree exactly this
+month. `npm run sqlcheck` reports this gap every run, and fails if it ever
+inverts — i.e. if the join starts finding contract invoices the dashboard misses,
+which is what a blank or comma-joined `invoice_origin` would cause.
+
+**Still an open business question, not a code one:** subscription orders confirmed
+within the month are counted twice — once as a confirmed order, once as contract
+invoicing. In August that is £5,700.06 across four orders (`196396`, `196369`,
+`196309`, `196211`). **Both** the SQL and the dashboard do this, so it is not a
+divergence and "fixing" it would break the agreement; but it does inflate Orders.
+Worth a decision on whether a contract's own confirmation should count toward the
+target alongside its invoicing.
 
 ## Notes on the Odoo v18 field mapping (division meters)
 
