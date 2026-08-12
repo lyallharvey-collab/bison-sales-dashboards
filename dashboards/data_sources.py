@@ -110,6 +110,46 @@ def read_group_totals(
     return {m: float(first.get(m) or 0.0) for m in measures}
 
 
+def read_group_net_by_team(
+    client: OdooClient,
+    model: str,
+    domain: list,
+    date_field: str,
+    measure: str,
+    day_from: date,
+    day_to: date,
+) -> dict[int, float]:
+    """Like read_group_by_team, but NETS credit notes instead of adding them:
+    groups by team_id AND move_type and subtracts ``out_refund``.
+
+    Needed because credit notes carry a POSITIVE amount_untaxed in Odoo. The
+    company Orders line has netted them since Aug 2026; the per-division split
+    did not, and summed them, so the division board over-read by twice every
+    refund — GBP834.00 on a single GBP417.00 credit note, which is how it was
+    caught (the divisions stopped summing to the company line). Same bug, second
+    location: any per-team money coming off account.move must use this.
+    """
+    full_domain = [
+        *domain,
+        (date_field, ">=", day_from.isoformat()),
+        (date_field, "<=", day_to.isoformat()),
+    ]
+    groups = client.read_group(
+        model, full_domain, [measure], ["team_id", "move_type"], lazy=False
+    )
+
+    out: dict[int, float] = {}
+    for g in groups:
+        team = g.get("team_id")
+        team_id = team[0] if isinstance(team, (list, tuple)) and team else 0
+        move_type = g.get("move_type")
+        if isinstance(move_type, (list, tuple)):
+            move_type = move_type[0]
+        amount = float(g.get(measure) or 0.0)
+        out[team_id] = out.get(team_id, 0.0) + (-amount if move_type == "out_refund" else amount)
+    return out
+
+
 def read_group_by_team(
     client: OdooClient,
     model: str,

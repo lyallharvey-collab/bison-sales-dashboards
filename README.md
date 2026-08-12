@@ -209,10 +209,29 @@ SQL, as assertions rather than silence:
 2. **Service-contract population.** See below. The check reports the difference
    and fails only if the *dashboard* is the one missing money.
 
-One practical note: this runs against a live, in-use system. An order confirmed
-mid-run shifts today's column — observed once, a £583.30 order landing at
-10:11:42 — so the check reads the SQL side either side of the dashboard build and
-labels a moving figure as live movement rather than a mismatch.
+It also asserts that the **division board sums to the company Orders line**. That
+reconciliation is what exposed the per-division refund bug, so it is now checked
+every run rather than by eye.
+
+### Churn: both live checks run against a moving target
+
+This is a live, in-use ERP. Orders are confirmed and edited while the checks run,
+and the difference always lands on **today's** bucket, which looks exactly like a
+bug. Observed on one afternoon: £583.30 at 10:11:42, £327.00 at 14:25:06, and a
+£12,473.75 order at 14:20:15 that moved a whole day's figure between two runs
+minutes apart. That produced a false "DO NOT SHIP" twice.
+
+Both checks now account for it, and neither uses a blind fudge factor:
+
+- `sqlparity` reads the SQL side **either side of** the dashboard build, and
+  labels a figure that moved in between as live movement.
+- `compare` (JS vs Python) can't re-read a payload another process wrote minutes
+  ago, so it asks Odoo what actually changed: it sums `sale.order` records with
+  `write_date` after the Python payload's `generated_at`, and accepts a difference
+  on today's bucket only if it is within that. A difference on any earlier bucket,
+  or larger than the measured churn, still fails.
+
+If a check reports churn, re-run it when the book is quiet to get a clean pass.
 
 ## Adding a new dashboard
 
@@ -365,6 +384,14 @@ Things that are load-bearing rather than cosmetic:
   figure. `npm run livetest` prints the gap if the parts stop adding up to the
   whole. TOTAL's *target* is the company field, not the sum of the three, so this
   page and the Sales Graph can't disagree about what the company target is.
+- **Credit notes must be netted per team, not summed.** They carry a positive
+  `amount_untaxed` in Odoo, so `readGroupNetByTeam` groups by `team_id` AND
+  `move_type` and subtracts `out_refund`. This was missed when the meters were
+  first written — the company line already netted, the per-division split didn't,
+  and a single £417.00 credit note made the board over-read by £834.00. The only
+  visible symptom was the divisions no longer summing to the Orders line above
+  them, so `npm run sqlcheck` now asserts that reconciliation on every run, and
+  `lib/divisionrefunds.test.mjs` pins it offline.
 
 ## Keeping it running
 
@@ -465,6 +492,27 @@ version; the config maps them as:
 | `sale_subscription` (table of contract `code`s) | **legacy table, do not use** — see below. Subscriptions are now `sale.order` records with `is_subscription = True`; matched to invoices via `account.move.invoice_origin` |
 | `machinary_stage_id = 2` (Proforma) | confirmed live: stage id 2 = "PROFORMA" |
 
+### Contract orders are excluded from the Orders leg (Aug 2026)
+
+A service contract used to be counted **twice**: once when the contract order was
+confirmed, and again when it invoiced. £6,542.30 in August 2026 alone, across six
+orders. The confirmed-orders leg now excludes contract orders and their children
+(`plan_id is null and subscription_id is null`), matching the reference SQL, so a
+contract reaches Orders only through its invoicing.
+
+Two things to know:
+
+- **The proforma leg is deliberately NOT filtered the same way.** The reference
+  SQL applies the exclusion only to confirmed orders, and this mirrors it.
+- **`CONTRACT_PLAN_IDS = [1, 2]` is hardcoded**, in `lib/specialSources.js` and
+  `dashboards/special_sources.py`, because the SQL says `plan_id in (1,2)`. Those
+  are the only two `sale.subscription.plan` records that exist ("Upgraded Service
+  Contract" monthly, "Upgraded Annual Contract"), so today it means "has a plan" —
+  but **a third plan would silently stop counting in both**. `npm run sqlcheck`
+  fails if a plan outside the list appears, which turns that drift into a loud
+  error rather than quietly missing money. If you add one, update both files *and*
+  the SQL.
+
 ### Which service contracts count — RESOLVED (Aug 2026)
 
 This was the one open question left by the Ninja xlsx comparison: the dashboard
@@ -507,13 +555,7 @@ month. `npm run sqlcheck` reports this gap every run, and fails if it ever
 inverts — i.e. if the join starts finding contract invoices the dashboard misses,
 which is what a blank or comma-joined `invoice_origin` would cause.
 
-**Still an open business question, not a code one:** subscription orders confirmed
-within the month are counted twice — once as a confirmed order, once as contract
-invoicing. In August that is £5,700.06 across four orders (`196396`, `196369`,
-`196309`, `196211`). **Both** the SQL and the dashboard do this, so it is not a
-divergence and "fixing" it would break the agreement; but it does inflate Orders.
-Worth a decision on whether a contract's own confirmation should count toward the
-target alongside its invoicing.
+(The double-count this used to cause is fixed — see the section above.)
 
 ## Notes on the Odoo v18 field mapping (division meters)
 

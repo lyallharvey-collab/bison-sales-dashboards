@@ -18,9 +18,13 @@ from datetime import date
 
 import pandas as pd
 
-from .data_sources import read_group_by_team, read_group_totals
+from .data_sources import read_group_by_team, read_group_net_by_team, read_group_totals
 from .odoo_client import OdooClient
-from .special_sources import PROFORMA_STAGE_ID, subscription_order_names
+from .special_sources import (
+    NOT_A_CONTRACT_ORDER,
+    PROFORMA_STAGE_ID,
+    subscription_order_names,
+)
 
 # The whole business, in three parts. Verified against live Odoo: there are
 # exactly three crm.team records, so this is a closed 1:1 mapping.
@@ -80,7 +84,8 @@ def _subscription_invoices_by_team(
     names = subscription_order_names(client)
     if not names:
         return {}
-    return read_group_by_team(
+    # NET, not summed — credit notes are positive in Odoo. See read_group_net_by_team.
+    return read_group_net_by_team(
         client,
         "account.move",
         [
@@ -103,6 +108,10 @@ def _orders_by_team(client: OdooClient, day_from: date, day_to: date) -> dict[in
     """The same three ingredients as the company Orders line — confirmed
     orders, proformas, subscription invoicing — but split by team.
 
+    Contract orders are excluded from the confirmed leg for the same reason as
+    the company line: they invoice separately and would otherwise count twice.
+    The exclusion is imported rather than restated so the two cannot drift.
+
     ONE deliberate divergence: sales_orders_component pins the whole month's
     subscription lump onto the month's first day with activity, because the
     original SQL joined one monthly total onto one row. A meter covering a
@@ -112,7 +121,7 @@ def _orders_by_team(client: OdooClient, day_from: date, day_to: date) -> dict[in
     material on the day it lands, so dropping it would understate SAS.
     """
     confirmed = read_group_by_team(
-        client, "sale.order", [("state", "=", "sale")],
+        client, "sale.order", [("state", "=", "sale"), *NOT_A_CONTRACT_ORDER],
         "date_order", "amount_untaxed", day_from, day_to,
     )
     proforma = read_group_by_team(

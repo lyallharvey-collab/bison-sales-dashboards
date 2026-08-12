@@ -27,10 +27,31 @@ from .odoo_client import OdooClient
 # screen.
 PROFORMA_STAGE_ID = 2  # x_daily_sales_targets / sale.order "Machinery Stage" = PROFORMA
 
+# The service-contract plans that count toward the sales target.
+# 1 = "Upgraded Service Contract" (monthly), 2 = "Upgraded Annual Contract".
+# These are the only two sale.subscription.plan records that exist, so today this
+# is equivalent to "has a plan" — but it is written as an explicit list because
+# the reference SQL says `plan_id in (1,2)`, and a THIRD plan added in Odoo would
+# be silently excluded by both. `npm run sqlcheck` fails if a plan outside this
+# list appears, so that drift is loud rather than silent.
+CONTRACT_PLAN_IDS = [1, 2]
+
+# A sale order that IS a contract on one of those plans, or a child order of one
+# (a renewal keeps subscription_id pointing at its parent). Mirrors the SQL's
+# `so.plan_id in (1,2) OR EXISTS (parent pp WHERE pp.plan_id in (1,2))`.
+CONTRACT_ORDER_DOMAIN = [
+    "|",
+    ("plan_id", "in", CONTRACT_PLAN_IDS),
+    ("subscription_id.plan_id", "in", CONTRACT_PLAN_IDS),
+]
+
+# Excluded from the confirmed-orders leg so a contract is not counted twice.
+NOT_A_CONTRACT_ORDER = [("plan_id", "=", False), ("subscription_id", "=", False)]
+
 
 def subscription_order_names(client: OdooClient) -> list[str]:
     sub_orders = client.search_read(
-        "sale.order", [["is_subscription", "=", True]], fields=["name"], limit=10000
+        "sale.order", list(CONTRACT_ORDER_DOMAIN), fields=["name"], limit=10000
     )
     return [o["name"] for o in sub_orders]
 
@@ -103,8 +124,13 @@ def sales_orders_component(
 ) -> pd.Series:
     day_to = min(today, month_end)
 
+    # Contract orders are EXCLUDED here. They would otherwise be counted twice —
+    # once when the contract is confirmed and again when it invoices — which was
+    # worth GBP6,215.30 in August 2026 alone. The proforma leg below is
+    # deliberately NOT filtered the same way: the reference SQL applies the
+    # exclusion only to confirmed orders.
     confirmed = read_group_daily(
-        client, "sale.order", [("state", "=", "sale")],
+        client, "sale.order", [("state", "=", "sale"), *NOT_A_CONTRACT_ORDER],
         "date_order", "amount_untaxed", month_start, day_to,
     )
     proforma = read_group_daily(
@@ -134,8 +160,9 @@ def orders_ytd_monthly_component(
     """
     month_to = min(today, year_end)
 
+    # Contract orders excluded here too — same double-count as the daily case.
     confirmed = read_group_monthly(
-        client, "sale.order", [("state", "=", "sale")],
+        client, "sale.order", [("state", "=", "sale"), *NOT_A_CONTRACT_ORDER],
         "date_order", "amount_untaxed", year_start, month_to,
     )
     proforma = read_group_monthly(
