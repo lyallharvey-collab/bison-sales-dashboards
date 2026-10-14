@@ -99,7 +99,7 @@ panels:
 
   - id: opportunities_table
     type: table
-    title: "New Opportunities This Week"
+    title: "Forecasted Pipeline"
     col: right
     flex: 6
     theme:
