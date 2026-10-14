@@ -57,11 +57,14 @@ jobs:
       - name: Unit-test the data layer
         run: npm test
 
+      # cloudflare/pages-action was deprecated and its repository deleted, which
+      # broke every run from Oct 2026 with "Cannot access repositories
+      # 'cloudflare/pages-action'" before any step ran. wrangler-action is
+      # Cloudflare's replacement and takes the same deploy as a wrangler command
+      # — the same one `npm run deploy` runs locally.
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/pages-action@v1
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: bison-dashboards   # must already exist — see README
-          directory: output
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: pages deploy output --project-name=bison-dashboards
