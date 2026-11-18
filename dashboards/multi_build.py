@@ -15,6 +15,7 @@ from . import crm_sources
 from .build import build_dashboard as _build_daily_chart
 from .config_schema import DashboardConfig, SeriesConfig
 from .data_sources import read_group_monthly
+from .activity_sources import CATEGORIES, rep_activity
 from .division_sources import division_meters
 from .multi_config_schema import MultiDashboardConfig, PanelConfig, PanelSeriesConfig
 from .odoo_client import OdooClient, get_client
@@ -116,6 +117,17 @@ def _build_meter_group(client: OdooClient, panel: PanelConfig, today: date) -> d
     }
 
 
+def _build_activity_bars(client: OdooClient, panel: PanelConfig, today: date) -> dict:
+    """Per-rep points split by activity type, every period at once. Rendered as
+    CSS bars, not Chart.js."""
+    return {
+        "title": panel.title,
+        "default_period": panel.period,
+        "categories": CATEGORIES,
+        "periods": rep_activity(client, today),
+    }
+
+
 def _build_table(client: OdooClient, panel: PanelConfig) -> dict:
     if panel.source == "crm_pipeline_table":
         rows = crm_sources.pipeline_table(client)
@@ -145,6 +157,8 @@ def build_multi_dashboard(cfg: MultiDashboardConfig, today: date | None = None) 
             body = _build_kpi(client, p, today)
         elif p.type == "meter_group":
             body = _build_meter_group(client, p, today)
+        elif p.type == "activity_bars":
+            body = _build_activity_bars(client, p, today)
         elif p.type == "table":
             body = _build_table(client, p)
         else:

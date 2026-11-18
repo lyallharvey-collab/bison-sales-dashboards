@@ -181,6 +181,62 @@
     .meter.just-crossed .meter-track { animation: none; }
   }
 
+  /* --- activity_bars: one split bar per rep ------------------------------
+     NOT Chart.js, for the same reasons as the meters: a stacked bar per row
+     with labels inside the segments is a few divs, and CSS keeps it crisp at
+     any zoom. Bar length = the rep's points against the busiest rep in the
+     period (one shared scale, or the rows stop being comparable); segments =
+     each activity type's share of that rep's points. */
+  .panel-activity-bars .panel-body { display: flex; flex-direction: column; }
+  .act-caption {
+    flex: none; font-size: calc(1.6vh * var(--scale)); font-weight: 600;
+    opacity: 0.6; padding: 0 0 0.6vh;
+  }
+  .act-rows {
+    flex: 1; min-height: 0; display: flex; flex-direction: column;
+    justify-content: space-around; gap: 1vh; padding: 0.8vh 0;
+  }
+  .act-row {
+    display: grid; align-items: center; column-gap: 1.4vw;
+    grid-template-columns: calc(13vw * var(--scale)) minmax(0, 1fr) calc(7.5vw * var(--scale));
+  }
+  .act-who { min-width: 0; display: flex; flex-direction: column; }
+  .act-name {
+    font-size: calc(2.4vh * var(--scale)); font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .act-sub { font-size: calc(1.5vh * var(--scale)); font-weight: 600; opacity: 0.6; white-space: nowrap; }
+  .act-track {
+    height: calc(5.6vh * var(--scale)); display: flex; align-items: stretch;
+    background: rgba(0,0,0,0.04); border-radius: 8px; overflow: hidden;
+  }
+  /* The 2px gaps are the panel colour showing through, so adjacent segments
+     stay separable without relying on colour alone. */
+  .act-bar { display: flex; align-items: stretch; gap: 2px; background: var(--panel-bg, #ffffff); }
+  .act-seg {
+    min-width: 0; display: flex; align-items: center; justify-content: center;
+    font-size: calc(1.9vh * var(--scale)); font-weight: 700; font-variant-numeric: tabular-nums;
+    overflow: hidden; white-space: nowrap;
+  }
+  .act-points { display: flex; flex-direction: column; align-items: flex-end; }
+  .act-points .v {
+    font-size: calc(3.7vh * var(--scale)); font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .act-points .u { font-size: calc(1.4vh * var(--scale)); font-weight: 600; opacity: 0.6; }
+  .act-legend {
+    flex: none; display: flex; justify-content: center; align-items: baseline; flex-wrap: wrap;
+    gap: 0.8vh 2vw; padding-top: 1.4vh; border-top: 1px solid rgba(0,0,0,0.08);
+  }
+  .act-legend .lg { display: flex; align-items: baseline; gap: 0.45vw; }
+  .act-legend .sw { width: 1.3vh; height: 1.3vh; border-radius: 3px; align-self: center; flex: none; }
+  .act-legend .lab { font-size: calc(1.6vh * var(--scale)); font-weight: 600; opacity: 0.65; white-space: nowrap; }
+  .act-legend .val { font-size: calc(2.5vh * var(--scale)); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .act-legend .pct { font-size: calc(1.5vh * var(--scale)); font-weight: 600; opacity: 0.55; }
+  /* Team is the whole, the categories are the parts — same hairline as TOTAL
+     on the meters. */
+  .act-legend .lg.team { padding-left: 2vw; border-left: 1px solid rgba(0,0,0,0.14); }
+
   .panel-table .panel-body { padding: 0; overflow: auto; }
   table.data-table { width: 100%; border-collapse: collapse; font-size: calc(1.8vh * var(--scale)); }
   table.data-table th, table.data-table td {
@@ -254,6 +310,12 @@
                divisions there are. #}
             <div class="meter-caption" id="meter-caption-{{ panel.id }}"></div>
             <div class="meter-group" id="meters-{{ panel.id }}"></div>
+          {% elif panel.type == 'activity_bars' %}
+            {# Rows and legend are built in JS from the payload, like the
+               meters, so the shell doesn't need to know who the reps are. #}
+            <div class="act-caption" id="act-caption-{{ panel.id }}"></div>
+            <div class="act-rows" id="act-rows-{{ panel.id }}"></div>
+            <div class="act-legend" id="act-legend-{{ panel.id }}"></div>
           {% elif panel.type == 'table' %}
             <table class="data-table" id="table-{{ panel.id }}">
               <thead><tr>
@@ -308,6 +370,10 @@ function renderViewbar() {
   const bar = document.getElementById('viewbar');
   if (!bar || !DV) return;
   if (MODE === 'kiosk') { bar.innerHTML = ''; return; }
+  // A page of activity bars switches PERIOD, not chart view — same pill row,
+  // same one-control-scopes-the-page rule.
+  const act = lastPayload && lastPayload.panels.find((p) => p.type === 'activity_bars');
+  if (act) { renderPeriodbar(bar, act); return; }
   // The views are all chart derivations (running total, per day, vs target,
   // projection). A page with no chart on it has nothing to switch, so offering
   // the buttons would just be four dead controls.
@@ -835,6 +901,137 @@ function renderMeterGroupPanel(panel) {
   });
 }
 
+// --- activity_bars --------------------------------------------------------
+// The period comes from the URL like the chart view does, so a kiosk can be
+// pinned to ?period=last_week and come back to it after a reload; with none
+// given, the panel's configured default. Every period is already in the
+// payload, so switching costs no request.
+const PERIOD_PARAM = new URLSearchParams(location.search).get('period');
+let currentPeriod = PERIOD_PARAM;
+
+function activePeriod(panel) {
+  const periods = panel.periods || [];
+  return periods.find((p) => p.key === currentPeriod)
+    || periods.find((p) => p.key === panel.default_period)
+    || periods[0] || null;
+}
+
+function setPeriod(next, panel) {
+  if (next === (activePeriod(panel) || {}).key) return;
+  currentPeriod = next;
+  const u = new URL(location.href);
+  if (next === panel.default_period) u.searchParams.delete('period');
+  else u.searchParams.set('period', next);
+  history.replaceState(null, '', u);
+  renderViewbar();
+  renderActivityBarsPanel(panel);
+}
+
+function renderPeriodbar(bar, panel) {
+  const cur = activePeriod(panel);
+  bar.innerHTML = '';
+  (panel.periods || []).forEach((p) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = p.label;
+    b.setAttribute('aria-pressed', String(cur && p.key === cur.key));
+    b.addEventListener('click', () => setPeriod(p.key, panel));
+    bar.appendChild(b);
+  });
+  const hint = document.createElement('span');
+  hint.className = 'hint';
+  hint.textContent = 'Hover a segment for its counts';
+  bar.appendChild(hint);
+}
+
+function fmtPeriodRange(p) {
+  const d = (iso) => new Date(iso + 'T00:00:00');
+  const short = { day: 'numeric', month: 'short' };
+  const to = d(p.to).toLocaleDateString('en-GB', { ...short, year: 'numeric' });
+  if (p.from === p.to) return to;
+  return d(p.from).toLocaleDateString('en-GB', short) + ' – ' + to;
+}
+
+const fmtInt = (n) => Math.round(n || 0).toLocaleString('en-GB');
+
+function renderActivityBarsPanel(panel) {
+  const rowsHost = document.getElementById('act-rows-' + panel.id);
+  const legendHost = document.getElementById('act-legend-' + panel.id);
+  const caption = document.getElementById('act-caption-' + panel.id);
+  if (!rowsHost || !legendHost) return;
+  const cats = panel.categories || [];
+  const per = activePeriod(panel);
+  if (!per) return;
+
+  // States the window and the scoring in words: a bar of "points" means
+  // nothing without the rule that made them.
+  const rule = cats.map((c) => c.label + ' ' + c.points).join(' · ');
+  if (caption) caption.textContent = per.label + ', ' + fmtPeriodRange(per) + '  ·  points: ' + rule;
+
+  const reps = (per.reps || []).slice()
+    .sort((a, b) => (b.points - a.points) || a.name.localeCompare(b.name));
+  const max = Math.max(0, ...reps.map((r) => r.points));
+
+  // Rebuilt wholesale on each render. Six rows of divs is nothing, and it means
+  // a re-sort when the ranking changes can never leave a row behind.
+  rowsHost.innerHTML = '';
+  reps.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'act-row';
+    row.innerHTML =
+      '<div class="act-who"><div class="act-name"></div><div class="act-sub"></div></div>' +
+      '<div class="act-track"><div class="act-bar"></div></div>' +
+      '<div class="act-points"><div class="v"></div><div class="u">points</div></div>';
+    row.querySelector('.act-name').textContent = r.name;
+    row.querySelector('.act-sub').textContent =
+      fmtInt(r.activities) + (r.activities === 1 ? ' activity' : ' activities');
+    row.querySelector('.act-points .v').textContent = fmtInt(r.points);
+
+    const bar = row.querySelector('.act-bar');
+    bar.style.width = (max > 0 ? (100 * r.points) / max : 0) + '%';
+    cats.forEach((c) => {
+      const n = (r.counts || {})[c.key] || 0;
+      if (!n) return;
+      const pts = n * c.points;
+      const share = r.points ? pts / r.points : 0;
+      const seg = document.createElement('div');
+      seg.className = 'act-seg';
+      // flex-grow in points, so the 2px gaps come out of every segment
+      // proportionally instead of squeezing the last one.
+      seg.style.flex = pts + ' 1 0';
+      seg.style.background = c.color;
+      seg.style.color = c.ink;
+      // Only label a segment wide enough to hold its number; the rest still
+      // carry it in the tooltip and in the legend totals.
+      if (max > 0 && pts / max >= 0.06) seg.textContent = Math.round(share * 100) + '%';
+      seg.title = c.label + ': ' + fmtInt(n) + (c.points !== 1 ? ' × ' + c.points + ' = ' + fmtInt(pts) + ' points' : '')
+        + ' (' + Math.round(share * 100) + '% of ' + r.name.split(' ')[0] + '’s points)';
+      bar.appendChild(seg);
+    });
+    rowsHost.appendChild(row);
+  });
+
+  // Legend doubles as the team's split for the period.
+  legendHost.innerHTML = '';
+  const teamPts = per.points || 0;
+  cats.forEach((c) => {
+    const pts = ((per.totals || {})[c.key] || 0) * c.points;
+    const item = document.createElement('div');
+    item.className = 'lg';
+    item.innerHTML = '<div class="sw"></div><div class="lab"></div><div class="val"></div><div class="pct"></div>';
+    item.querySelector('.sw').style.background = c.color;
+    item.querySelector('.lab').textContent = c.label;
+    item.querySelector('.val').textContent = fmtInt(pts);
+    item.querySelector('.pct').textContent = teamPts ? Math.round((100 * pts) / teamPts) + '%' : '';
+    legendHost.appendChild(item);
+  });
+  const team = document.createElement('div');
+  team.className = 'lg team';
+  team.innerHTML = '<div class="lab">Team</div><div class="val"></div><div class="pct">points</div>';
+  team.querySelector('.val').textContent = fmtInt(teamPts);
+  legendHost.appendChild(team);
+}
+
 function renderTablePanel(panel) {
   const table = document.getElementById('table-' + panel.id);
   if (!table) return;
@@ -863,6 +1060,7 @@ function applyPayload(payload) {
       renderLineChartPanel(DV ? DV.applyView(panel, currentView) : panel);
     } else if (panel.type === 'kpi') renderKpiPanel(panel);
     else if (panel.type === 'meter_group') renderMeterGroupPanel(panel);
+    else if (panel.type === 'activity_bars') renderActivityBarsPanel(panel);
     else if (panel.type === 'table') renderTablePanel(panel);
   });
   renderViewbar();

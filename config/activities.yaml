@@ -1,0 +1,28 @@
+# Completed sales activities per rep, in points, split by activity type — the
+# per-rep tracker Simon kept in Excel until Odoo went live (Dec 2023).
+#
+# Points: call (in or out) 1; visit 1, or 5 if Contacted Call is ticked;
+# showroom visit 5. The reps, activity types and colours live in the source
+# (dashboards/activity_sources.py and lib/activitySources.js), not here.
+#
+# MIRROR ANY CHANGE HERE INTO lib/configs.js — this YAML drives the HTML shell,
+# lib/configs.js drives the live data, and nothing keeps them in sync.
+name: activities
+title: "Rep Activity"
+# Activity moves slowly, and the year-to-date query is the heaviest one the
+# dashboards put on mail.message, so 5 minutes rather than 2.
+refresh_seconds: 300
+
+panels:
+  - id: rep_activity
+    type: activity_bars
+    title: "Points by activity type"
+    col: left
+    flex: 1
+    # The period the page opens on: week | last_week | month | ytd. Every
+    # period is in the payload; the desktop buttons (or ?period= in the URL,
+    # e.g. on a kiosk) switch between them without another request.
+    period: week
+    theme:
+      background: "#ffffff"
+      font_color: "#111111"

@@ -297,7 +297,7 @@ table, in a 2-column grid). This is a **separate config shape**, detected
 automatically by the presence of a top-level `panels:` key — `generate.py`
 picks the right builder/template on its own, no flag needed.
 
-Each panel has a `type` (`line_chart` | `kpi` | `meter_group` | `table`), a `col`
+Each panel has a `type` (`line_chart` | `kpi` | `meter_group` | `activity_bars` | `table`), a `col`
 (`left`/`right`) and `flex` (relative height weight within that column —
 e.g. a short KPI tile at `flex: 3` above a taller table at `flex: 6`), plus
 its own `theme:` (panels can have wildly different colours, like the blue KPI
@@ -393,6 +393,50 @@ Things that are load-bearing rather than cosmetic:
   them, so `npm run sqlcheck` now asserts that reconciliation on every run, and
   `lib/divisionrefunds.test.mjs` pins it offline.
 
+## Rep activity (`type: activity_bars`)
+
+`config/activities.yaml` (served at `/activities/`) brings back the per-rep
+activity tracker Simon kept in Excel until Odoo went live: one split bar per rep,
+its length the rep's **points**, its segments the share of those points from
+each activity type.
+
+**Points** (Lyall's rule, the same one used to backfill the old spreadsheet from
+Odoo in `../activity-tracker/`): a call in or out is 1, contacted or not; a visit
+(Appointment or Site Demo) is 1, or 5 if **Contacted Call** is ticked; a showroom
+visit is 5. Email, Action and Online Meeting score nothing, as on the old sheet.
+
+**Where the numbers come from.** Marking an activity done in Odoo deletes the
+`mail.activity` and leaves a chatter `mail.message` carrying
+`mail_activity_type_id` and `contacted_call`, authored by whoever marked it done.
+So the source is one `read_group` on `mail.message` per period, grouped by
+author, type and the tick — at most 60 rows back. Reps are matched by
+**partner** id (the author), not user id; both lists live in
+`lib/activitySources.js` and `dashboards/activity_sources.py`.
+
+Things that are load-bearing rather than cosmetic:
+
+- **The Contacted tick was adopted unevenly.** Simon from about April 2024, Braden
+  and Angus from January 2025, Roddy almost never. An unticked visit scores 1 —
+  that was decided, not overlooked, so don't "fix" it by scoring visits as 5.
+- **Every period is in the payload** (this week, last week, this month, year to
+  date — four small read_groups, concurrently), so the desktop period buttons cost
+  no request, the same principle as the chart views. The period is read from the
+  URL (`?period=last_week`), so a kiosk can be pinned to one and keeps it across
+  reloads; without one it opens on the config's `period`.
+- **One shared scale.** Bars are sized against the busiest rep in the period, so
+  rows are comparable; reps are re-sorted by points on every render.
+- **Refreshes every 5 minutes**, not 2: activity moves slowly, and year-to-date is
+  the heaviest query the dashboards put on `mail.message`.
+- **UTC days**, like the rest of the project. During BST an activity marked done
+  between 23:00 and midnight on a Sunday lands in the next week; nobody logs calls
+  then.
+- **Checks.** `lib/activity.test.mjs` pins the scoring, the period edges (Monday,
+  Sunday, early January) and label contrast. `npm run sqlcheck` rebuilds *last*
+  week from per-type `search_count` with the rule restated — last week is closed,
+  so a difference there is real, never churn — and fails if a new activity type
+  that looks like a call or visit appears unscored. `npm run livetest` diffs JS
+  against Python, measuring activity churn since the Python run.
+
 ## Keeping it running
 
 There is one deploy: the Pages project. It carries both the HTML shell and the
@@ -425,6 +469,7 @@ push. Deploy by hand only when you want to skip CI.
 - **https://bison-dashboards.pages.dev/sales_graph/**
 - **https://bison-dashboards.pages.dev/sales_dashboard/**
 - **https://bison-dashboards.pages.dev/division_meters/**
+- **https://bison-dashboards.pages.dev/activities/**
 
 All are gated by Cloudflare Access, including the `/data.json` endpoints —
 confirmed by requesting them unauthenticated and getting a 302 to the Access

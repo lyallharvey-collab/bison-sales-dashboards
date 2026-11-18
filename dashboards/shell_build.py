@@ -22,6 +22,9 @@ from datetime import date, datetime, timezone
 import pandas as pd
 
 from .config_schema import DashboardConfig
+from .activity_sources import CATEGORIES as ACTIVITY_CATEGORIES
+from .activity_sources import PERIODS as ACTIVITY_PERIODS
+from .activity_sources import period_bounds as activity_period_bounds
 from .division_sources import MEASURES, PERIOD_LABELS, meter_bounds
 from .multi_config_schema import MultiDashboardConfig, PanelConfig
 
@@ -103,6 +106,17 @@ def _shell_panel(p: PanelConfig, page_theme: dict, today: date) -> dict:
             "period_to": day_to.isoformat(),
             "meters": [],
         }
+
+    if p.type == "activity_bars":
+        # Categories (the legend) and the period windows are config/calendar
+        # facts, so the shell can state them before the first fetch; the rep
+        # rows are built in JS from the payload, like table rows.
+        periods = []
+        for per in ACTIVITY_PERIODS:
+            day_from, day_to = activity_period_bounds(per["key"], today)
+            periods.append({**per, "from": day_from.isoformat(), "to": day_to.isoformat(),
+                            "reps": [], "totals": {}, "points": 0, "activities": 0})
+        return {**base, "default_period": p.period, "categories": ACTIVITY_CATEGORIES, "periods": periods}
 
     if p.type == "table":
         return {

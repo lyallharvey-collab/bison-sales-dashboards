@@ -39,7 +39,7 @@ class TableColumn:
 @dataclass
 class PanelConfig:
     id: str
-    type: str  # line_chart | kpi | meter_group | table
+    type: str  # line_chart | kpi | meter_group | activity_bars | table
     title: str = ""
     theme: dict = field(default_factory=dict)
     # Layout: which column this panel stacks in, and its relative height
@@ -58,6 +58,8 @@ class PanelConfig:
     caption: str | None = None
     # meter_group — a meter is one ratio against a limit, so it has no series,
     # no labels and no axis; just the window it covers and which actual to use.
+    # activity_bars reuses `period` for the period the page opens on:
+    # week | last_week | month | ytd.
     period: str = "day"  # day | month
     measure: str = "orders"  # orders | invoiced
     # table
